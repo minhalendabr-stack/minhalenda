@@ -27,19 +27,21 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     env:
-      ML_CACHE: ${{ runner.temp }}/cache
-      ML_OUT: ${{ runner.temp }}/out
+      ML_CACHE: /tmp/ml-cache
+      ML_OUT: /tmp/ml-out
       ML_FONTS: ${{ github.workspace }}/entrega/fonts
     steps:
       - uses: actions/checkout@v4
 
       - name: Fila de pedidos
         id: fila
+        env:
+          PEDIDO: ${{ github.event.inputs.pedido || github.event.client_payload.pedido }}
         run: |
           tok=$(curl -sf -H "authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=minhalenda" | python3 -c "import sys,json;print(json.load(sys.stdin)['value'])")
           echo "::add-mask::$tok"
           n=$(curl -sf -A 'MinhaLenda-Executor/1.0' -H "authorization: Bearer $tok" "https://minhalenda.com.br/admin/api/pedidos?status=fila" | python3 -c "import sys,json;print(len(json.load(sys.stdin)['pedidos']))" || echo 0)
-          if [ -n "${{ github.event.inputs.pedido }}" ]; then n=1; fi
+          if [ -n "$PEDIDO" ]; then n=1; fi
           echo "pedidos na fila: $n"
           echo "n=$n" >> "$GITHUB_OUTPUT"
 
@@ -54,4 +56,6 @@ jobs:
 
       - name: Produzir e entregar
         if: steps.fila.outputs.n != '0'
-        run: python3 entrega/entrega.py ${{ github.event.inputs.pedido }}
+        env:
+          PEDIDO: ${{ github.event.inputs.pedido || github.event.client_payload.pedido }}
+        run: python3 entrega/entrega.py $PEDIDO
