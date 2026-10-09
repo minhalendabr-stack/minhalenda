@@ -175,6 +175,36 @@ section{{break-after:page}}.capa{{page:capa;position:relative;width:148mm;height
         pg.pdf(path=str(od / 'livro.pdf'), prefer_css_page_size=True, print_background=True); b.close()
     log('pdf ok:', round((od / 'livro.pdf').stat().st_size / 1e6, 1), 'MB')
 
+# ---------------- folhear e imprimir em casa ----------------
+def folhear(h, od):
+    """Páginas do PDF viram imagens para o leitor de folhear; mapa história->folha para virar junto com a narração;
+    e dois PDFs para imprimir em casa: livreto A4 (frente e verso, dobra e grampeia) e A4 uma página por folha."""
+    import pymupdf
+    src = pymupdf.open(od / 'livro.pdf'); n = len(src); folhas = []
+    for i, pg in enumerate(src):
+        nome = f'fl-{i + 1:02d}.jpg'
+        pix = pg.get_pixmap(dpi=120); im = Image.frombytes('RGB', (pix.width, pix.height), pix.samples)
+        im.save(od / nome, 'JPEG', quality=80, optimize=True, progressive=True); folhas.append(nome)
+    limpa = lambda t: re.sub(r'\W+', '', str(t)).lower()
+    textos = [limpa(pg.get_text()) for pg in src]; mapa, j = [], 0
+    for p in h['paginas']:
+        chave = limpa(p.get('texto', ''))[2:42]  # pula a capitular
+        k = next((x for x in range(j, n) if chave and chave in textos[x]), j); mapa.append(k); j = k
+    # livreto: total múltiplo de 4, folhas A4 deitadas com 2 páginas A5; imprimir frente e verso virando na borda curta
+    tot = (n + 3) // 4 * 4; W, H = 842, 595; liv = pymupdf.open()
+    for f in range(tot // 4):
+        for esq, dir_ in ((tot - 1 - 2 * f, 2 * f), (2 * f + 1, tot - 2 - 2 * f)):
+            pg = liv.new_page(width=W, height=H)
+            for idx, r in ((esq, pymupdf.Rect(0, 0, W / 2, H)), (dir_, pymupdf.Rect(W / 2, 0, W, H))):
+                if idx < n: pg.show_pdf_page(r, src, idx)
+    liv.save(od / 'imprimir-livreto-a4.pdf', garbage=3, deflate=True)
+    a4 = pymupdf.open()
+    for i in range(n):
+        pg = a4.new_page(width=595, height=842); pg.show_pdf_page(pg.rect, src, i)
+    a4.save(od / 'imprimir-a4.pdf', garbage=3, deflate=True)
+    log('folhear ok:', n, 'folhas | pdf para imprimir ok')
+    return folhas, mapa
+
 # ---------------- áudio ----------------
 KEY = None
 def tts(text, voice):
@@ -257,12 +287,13 @@ def produzir(pid):
         (od / 'historia.json').write_text(json.dumps(h, ensure_ascii=False, indent=1), encoding='utf-8')
         ilus = ilustrar(h, dna, p['foto_b64'], estilo, od)
         pdf(h, ilus, dna, od)
+        folhas, mapa = folhear(h, od)
         marcas = narrar(h, dna, od)
-        nomes = ['capa.jpg', 'livro.pdf', 'audiolivro.mp3'] + [x['arquivo'] for x in ilus]
+        nomes = ['capa.jpg', 'livro.pdf', 'audiolivro.mp3', 'imprimir-livreto-a4.pdf', 'imprimir-a4.pdf'] + [x['arquivo'] for x in ilus] + folhas
         subir(pid, od, nomes)
         livro = {'titulo': h.get('titulo'), 'dedicatoria': h.get('dedicatoria'), 'gancho_proximo': h.get('gancho_proximo'),
                  'paginas': [{'n': x.get('n'), 'capitulo': x.get('capitulo'), 'texto': x.get('texto')} for x in h['paginas']], 'ilustracoes': ilus}
-        api(f'/admin/api/pedido/{pid}', {'status': 'entregue', 'resultado': {'capa': 'capa.jpg', 'livro': livro, 'marcas': marcas, 'nota': crit.get('media')}})
+        api(f'/admin/api/pedido/{pid}', {'status': 'entregue', 'resultado': {'capa': 'capa.jpg', 'livro': livro, 'marcas': marcas, 'nota': crit.get('media'), 'folhas': len(folhas), 'folha_de': mapa, 'imprimir': True}})
         log(pid, 'ENTREGUE', f'{SITE}/l/{p["token"]}', privado=True)
     except Exception as e:
         api(f'/admin/api/pedido/{pid}', {'status': 'falhou', 'erro': str(e)[:700]}); raise
