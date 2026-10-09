@@ -78,8 +78,11 @@ def log(*a, privado=False):
 
 # ---------------- história ----------------
 def escrever(dna):
-    pl = api('/admin/api/plano', dna); plan = pl['plan']
+    pl = api('/admin/api/plano', dna)
+    if 'plan' not in pl: raise RuntimeError('motor/plano: ' + str(pl.get('erro') or pl)[:300])
+    plan = pl['plan']
     tx = api('/admin/api/texto', {'dna': dna, 'plan': plan})
+    if 'txt' not in tx: raise RuntimeError('motor/texto: ' + str(tx.get('erro') or tx)[:300])
     montar = lambda: {**plan, 'paginas': tx['txt'].get('paginas') or [], 'gancho_proximo': tx['txt'].get('gancho_proximo') or ''}
     cr = api('/admin/api/critica', {'dna': dna, 'h': montar()}); rev = 0
     while not cr.get('aprovada') and rev < (2 if dna.get('enredo_livre') else 1):
@@ -268,4 +271,7 @@ if __name__ == '__main__':
     log('pedidos:', ids or 'nenhum')
     for pid in ids:
         try: produzir(pid)
-        except Exception as e: log(pid, 'FALHOU', str(e)[:400])
+        except Exception as e:
+            # tipo do erro no log público; a mensagem completa vai para o painel e para o e-mail de aviso
+            log(pid, 'FALHOU', type(e).__name__, str(e)[:160] if str(e).startswith('motor/') else '')
+            log(pid, str(e)[:400], privado=True)
