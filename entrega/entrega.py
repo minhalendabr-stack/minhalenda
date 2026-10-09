@@ -85,7 +85,9 @@ def escrever(dna):
     if 'txt' not in tx: raise RuntimeError('motor/texto: ' + str(tx.get('erro') or tx)[:300])
     montar = lambda: {**plan, 'paginas': tx['txt'].get('paginas') or [], 'gancho_proximo': tx['txt'].get('gancho_proximo') or ''}
     cr = api('/admin/api/critica', {'dna': dna, 'h': montar()}); rev = 0
-    while not cr.get('aprovada') and rev < (2 if dna.get('enredo_livre') else 1):
+    longo = lambda: any('Texto longo' in str(x) for x in (cr.get('probs') or []))
+    # tamanho travado por faixa (09/10): texto longo ganha uma revisão a mais só para cortar
+    while not cr.get('aprovada') and rev < (2 if dna.get('enredo_livre') or longo() else 1):
         tx = api('/admin/api/texto', {'dna': dna, 'plan': plan, 'rev': {'probs': cr.get('probs'), 'anterior': tx['txt'].get('paginas')}})
         cr = api('/admin/api/critica', {'dna': dna, 'h': montar()}); rev += 1
     h = montar()
