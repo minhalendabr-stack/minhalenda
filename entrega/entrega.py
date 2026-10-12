@@ -249,7 +249,9 @@ def grafica(h, ilus, dna, od, pid, pedido):
         _upscale(od / x['arquivo'], od / ('p_' + x['arquivo']), 1417, 2008)
     nome = html.escape(dna['nome']); tit = html.escape(h.get('titulo', ''))
     col = {'0': 'Coleção Ouvir', '1': 'Coleção Ler Junto', '2': 'Coleção Aventura'}[str(dna.get('fase', '1'))]
-    body = f'<section class="rosto"><p class="col">Minha Lenda · {col}</p><h1>{tit}</h1><p class="para">Uma lenda criada especialmente para {nome}</p></section>'
+    ded_cli = (dna.get('dedicatoria') or '').strip()  # opcional: só entra se o cliente escreveu
+    body = (f'<section class="rosto"><p class="col">Minha Lenda · {col}</p><h1>{tit}</h1><p class="para">Uma lenda criada especialmente para {nome}</p>'
+            + (f'<p class="ded">{html.escape(ded_cli)}</p>' if ded_cli else '') + '</section>')
     first = True
     for i, p in enumerate(h['paginas']):
         n = int(p.get('n') or i + 1)
@@ -271,6 +273,7 @@ def grafica(h, ilus, dna, od, pid, pedido):
 *{{-webkit-print-color-adjust:exact;print-color-adjust:exact;box-sizing:border-box}}body{{margin:0;font-family:Alegreya;color:#1C1236}}
 section{{break-after:page}}.rosto{{page:rosto;padding-top:46mm;text-align:center}}.rosto .col{{font:700 8.5pt AlegreyaSans;letter-spacing:.14em;text-transform:uppercase;color:#A8710F}}
 .rosto h1{{font:800 24pt/1.12 Alegreya;margin:8mm 0}}.rosto .para{{font:italic 500 13pt Alegreya;color:#5A5070}}
+.rosto .ded{{font:italic 500 13.5pt/1.55 Alegreya;margin:16mm auto 0;max-width:96mm;padding-top:9mm;border-top:.4mm solid #DDA53C;white-space:pre-line}}
 .pg p{{font:500 12.5pt/1.6 Alegreya;margin:0;white-space:pre-line}}.pg h2{{font:800 19pt/1.2 Alegreya;color:#A8710F;text-align:center;margin:0 0 8mm}}
 .cap{{float:left;font-size:3.1em;line-height:.82;margin:5px 7px 0 0;color:#A8710F}}.cap.goth{{font-family:Unifraktur}}.cap.roman{{font-weight:800}}
 .il{{display:flex;align-items:center;justify-content:center;height:170mm}}.il img{{max-width:100%;max-height:170mm;border-radius:3mm}}
@@ -303,18 +306,33 @@ section{{break-after:page}}.rosto{{page:rosto;padding-top:46mm;text-align:center
     # capa: A4 deitado (297 x 210) + 3 mm de sangria + 8 mm de margem para as marcas de corte
     mm = 72 / 25.4; S, M = 3, 8; CW, CH = 297 + 2 * S, 210 + 2 * S; PW, PH = CW + 2 * M, CH + 2 * M
     _upscale(od / 'capa.jpg', od / 'capa_print.jpg', round((148.5 + S) / 25.4 * 300), round(CH / 25.4 * 300))
-    ded = html.escape(h.get('dedicatoria') or f'Para {dna["nome"]}, a heroína desta história.' if dna.get('sexo') == 'f' else h.get('dedicatoria') or f'Para {dna["nome"]}, o herói desta história.')
+    import segno
+    qr = od / 'qr.svg'; segno.make('https://minhalenda.com.br/?o=livro', error='m').save(str(qr), scale=4, border=2, dark='#1C1236', light='#F3EDE2')
+    logo = (pathlib.Path(__file__).parent / 'logo.svg').as_uri()
     capa_html = f'''<!doctype html><html><head><meta charset="utf-8"><style>
 @font-face{{font-family:Alegreya;src:url({ff("Alegreya[wght].ttf")});font-weight:400 900}}@font-face{{font-family:Alegreya;font-style:italic;src:url({ff("Alegreya-Italic[wght].ttf")});font-weight:400 900}}
 @font-face{{font-family:AlegreyaSans;src:url({ff("AlegreyaSans-Medium.ttf")})}}
 @page{{size:{CW}mm {CH}mm;margin:0}}*{{box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}}body{{margin:0}}
 .w{{position:relative;width:{CW}mm;height:{CH}mm;overflow:hidden;display:flex}}
-.back{{width:{148.5 + S}mm;height:100%;background:#121D42;color:#F3EDE2;padding:{S + 22}mm {14}mm {S + 16}mm {S + 16}mm;display:flex;flex-direction:column;justify-content:space-between;text-align:center}}
-.back .d{{font:italic 500 15pt/1.5 Alegreya;margin-top:18mm}}.back .p{{font:500 11pt Alegreya;color:#C3BCD3}}.back .s{{font:700 8pt AlegreyaSans;letter-spacing:.16em;text-transform:uppercase;color:#DDA53C}}
+.back{{position:relative;width:{148.5 + S}mm;height:100%;background:radial-gradient(circle at 78% 12%,#2a2160 0,#121D42 55%);color:#F3EDE2;padding:{S + 16}mm 16mm {S + 14}mm {S + 16}mm;display:flex;flex-direction:column;gap:7mm;text-align:left}}
+.back .logo{{height:14mm;align-self:flex-start}}.back .mid{{margin:auto 0;display:flex;flex-direction:column;gap:6mm}}
+.back h2{{font:800 22pt/1.12 Alegreya;margin:0;color:#F3EDE2}}.back h2 b{{color:#DDA53C;font-weight:800}}
+.back p{{font:500 12.2pt/1.5 Alegreya;margin:0;color:#D9D2E6}}.back p b{{color:#F3EDE2}}
+.back .cta{{display:flex;gap:6mm;align-items:center;border-top:.35mm solid #DDA53C80;padding-top:6mm}}
+.back .cta img{{width:25mm;height:25mm;border-radius:2mm}}
+.back .cta .k{{font:700 7.6pt AlegreyaSans;letter-spacing:.16em;text-transform:uppercase;color:#DDA53C;margin-bottom:1.5mm}}
+.back .cta .h{{font:800 15pt Alegreya;color:#F3EDE2;margin:0}}.back .cta .u{{font:700 10.5pt AlegreyaSans;color:#F3EDE2;margin-top:1.5mm}}
+.back .para{{font:italic 500 9.5pt Alegreya;color:#A79FBD;text-align:center;margin-top:-2mm}}
 .front{{position:relative;width:{148.5 + S}mm;height:100%;background:#121D42 url({(od / "capa_print.jpg").as_uri()}) center 40%/cover}}
 .front h1{{position:absolute;left:0;right:0;top:0;margin:0;padding:{S + 12}mm {S + 12}mm 30mm 12mm;text-align:center;font:800 24pt/1.1 Alegreya;color:#fff;background:linear-gradient(#0b0820d9,transparent)}}
 .front .c{{position:absolute;left:0;right:0;bottom:{S + 8}mm;text-align:center;font:700 8pt AlegreyaSans;letter-spacing:.16em;text-transform:uppercase;color:#FFE7A3;text-shadow:0 1px 3px #000a}}
-</style></head><body><div class="w"><div class="back"><div class="d">{ded}</div><div><p class="p">Uma lenda criada especialmente para {nome}.</p><p class="s">Minha Lenda · minhalenda.com.br</p></div></div>
+</style></head><body><div class="w"><div class="back">
+<img class="logo" src="{logo}" alt="Minha Lenda">
+<div class="mid"><h2>Toda criança tem histórias.<br><b>Aqui, elas viram lendas.</b></h2>
+<p>Cada livro da Minha Lenda é escrito do zero para uma criança só: com o nome dela, as pessoas que ela ama, o bichinho de casa e os desafios que ela está vivendo. Nenhuma história se repete.</p>
+<p><b>Ler junto todos os dias</b> amplia o vocabulário, acalma a hora de dormir e aproxima a família. E quando a história fala sobre ela, ler deixa de ser tarefa e vira vontade.</p></div>
+<div class="cta"><img src="{qr.as_uri()}" alt=""><div><div class="k">Siga e conheça as próximas aventuras</div><p class="h">@minhalenda</p><div class="u">Instagram · TikTok · YouTube<br>minhalenda.com.br</div></div></div>
+<p class="para">Uma lenda criada especialmente para {nome}.</p></div>
 <div class="front"><h1>{tit}</h1><div class="c">Minha Lenda · {col}</div></div></div></body></html>'''
     hp = od / 'grafica-capa.html'; hp.write_text(capa_html, encoding='utf-8')
     from playwright.sync_api import sync_playwright
