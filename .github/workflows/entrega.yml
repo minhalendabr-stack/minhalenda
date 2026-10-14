@@ -13,6 +13,10 @@ on:
       pedido:
         description: "ID do pedido (opcional, ex.: ML-ABC123)"
         required: false
+      modo:
+        description: "produzir | rediagramar | refazer"
+        required: false
+        default: produzir
 
 concurrency:
   group: entregas
@@ -58,4 +62,5 @@ jobs:
         if: steps.fila.outputs.n != '0'
         env:
           PEDIDO: ${{ github.event.inputs.pedido || github.event.client_payload.pedido }}
+          MODO: ${{ github.event.inputs.modo || github.event.client_payload.modo || 'produzir' }}
         run: python3 entrega/entrega.py $PEDIDO

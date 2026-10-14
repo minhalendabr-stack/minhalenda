@@ -10,6 +10,8 @@ Variáveis opcionais: ML_ADM_DIR (pasta Adm), ML_SITE (padrão https://minhalend
 """
 import base64, concurrent.futures as cf, hashlib, html, io, json, os, pathlib, re, subprocess, sys, tempfile, time, urllib.request, wave
 from PIL import Image
+sys.path.insert(0, str(pathlib.Path(__file__).parent))
+import livro as livro_mod
 
 HERE = pathlib.Path(__file__).parent
 ADM = pathlib.Path(os.environ.get('ML_ADM_DIR', '/mnt/user-data/uploads/Minha Lenda/Adm'))
@@ -129,237 +131,7 @@ def ilustrar(h, dna, foto, estilo, od):
     log('imagens ok:', 1 + len(ilus))
     return ilus
 
-# ---------------- PDF ----------------
-GOTH = set('ECTDMLNFH')
-def capT(t):
-    t = str(t or ''); m = re.search(r'[A-Za-zÀ-ÿ]', t)
-    if not m: return html.escape(t)
-    i = m.start(); ch = t[i]; cls = 'goth' if ch.upper() in GOTH and ch == ch.upper() else 'roman'
-    return html.escape(t[:i]) + f'<span class="cap {cls}">{html.escape(ch)}</span>' + html.escape(t[i + 1:])
-
-def pdf(h, ilus, dna, od):
-    fonts = FONTS
-    ff = lambda n: (fonts / n).as_uri()
-    at = {x['pagina']: x['arquivo'] for x in ilus}
-    col = {'0': 'Coleção Ouvir', '1': 'Coleção Ler Junto', '2': 'Coleção Aventura'}[str(dna.get('fase', '1'))]
-    body = f'<section class="capa"><img src="{(od / "capa.jpg").as_uri()}"><h1>{html.escape(h.get("titulo", ""))}</h1></section>'
-    body += f'<section class="ded"><p class="col">Minha Lenda · {col}</p><p class="d">{html.escape(h.get("dedicatoria", ""))}</p></section>'
-    first = True
-    for i, p in enumerate(h['paginas']):
-        n = int(p.get('n') or i + 1)
-        body += '<section class="pg">' + (f'<h2>{html.escape(p["capitulo"])}</h2>' if p.get('capitulo') else '') + f'<p>{capT(p.get("texto")) if (first or p.get("capitulo")) else html.escape(p.get("texto", ""))}</p></section>'
-        first = False
-        if n in at: body += f'<section class="il"><img src="{(od / at[n]).as_uri()}"></section>'
-    if h.get('gancho_proximo'): body += f'<section class="gancho"><h2>Continua no mês que vem…</h2><p>{html.escape(h["gancho_proximo"])}</p></section>'
-    body += f'<section class="fim"><p>Esta lenda foi criada especialmente para {html.escape(dna["nome"])}.</p><p class="s">minhalenda.com.br</p></section>'
-    css = f'''@font-face{{font-family:Alegreya;src:url({ff("Alegreya[wght].ttf")});font-weight:400 900}}
-@font-face{{font-family:Alegreya;font-style:italic;src:url({ff("Alegreya-Italic[wght].ttf")});font-weight:400 900}}
-@font-face{{font-family:Unifraktur;src:url({ff("UnifrakturMaguntia-Book.ttf")})}}
-@font-face{{font-family:AlegreyaSans;src:url({ff("AlegreyaSans-Medium.ttf")})}}
-@page{{size:A5;margin:16mm 14mm 18mm;@bottom-center{{content:counter(page);font:10pt Alegreya;color:#7a6d8a}}}}
-@page capa{{margin:0;@bottom-center{{content:none}}}}
-*{{-webkit-print-color-adjust:exact;print-color-adjust:exact;box-sizing:border-box}}body{{margin:0;font-family:Alegreya;color:#1C1236}}
-section{{break-after:page}}.capa{{page:capa;position:relative;width:148mm;height:210mm;overflow:hidden;background:#121D42}}
-.capa img{{width:100%;height:100%;object-fit:cover}}.capa h1{{position:absolute;left:0;right:0;top:0;margin:0;padding:12mm 10mm 30mm;text-align:center;font:800 24pt/1.1 Alegreya;color:#fff;background:linear-gradient(#0b0820d9,transparent)}}
-.ded{{padding-top:50mm;text-align:center}}.ded .col{{font:700 9pt AlegreyaSans;letter-spacing:.14em;text-transform:uppercase;color:#A8710F}}.ded .d{{font:italic 500 14pt/1.5 Alegreya;margin-top:10mm}}
-.pg p{{font:500 12.5pt/1.6 Alegreya;margin:0;white-space:pre-line;text-align:left}}.pg h2{{font:800 19pt/1.2 Alegreya;color:#A8710F;text-align:center;margin:0 0 8mm}}
-.cap{{float:left;font-size:3.1em;line-height:.82;margin:5px 7px 0 0;color:#A8710F}}.cap.goth{{font-family:Unifraktur}}.cap.roman{{font-weight:800}}
-.il{{display:flex;align-items:center;justify-content:center;height:170mm}}.il img{{max-width:100%;max-height:170mm;border-radius:3mm}}
-.gancho{{padding-top:50mm;text-align:center}}.gancho h2{{color:#A8710F;font:800 18pt Alegreya}}.gancho p{{font:italic 500 13pt/1.5 Alegreya}}
-.fim{{padding-top:80mm;text-align:center;font:500 12pt Alegreya}}.fim .s{{font:9pt AlegreyaSans;color:#7a6d8a}}'''
-    doc = f'<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><style>{css}</style></head><body>{body}</body></html>'
-    hp = od / 'livro.html'; hp.write_text(doc, encoding='utf-8')
-    from playwright.sync_api import sync_playwright
-    with sync_playwright() as p:
-        b = p.chromium.launch(); pg = b.new_page(); pg.goto(hp.as_uri()); pg.wait_for_timeout(600)
-        pg.pdf(path=str(od / 'livro.pdf'), prefer_css_page_size=True, print_background=True); b.close()
-    log('pdf ok:', round((od / 'livro.pdf').stat().st_size / 1e6, 1), 'MB')
-
-# ---------------- folhear e imprimir em casa ----------------
-def folhear(h, od):
-    """Páginas do PDF viram imagens para o leitor de folhear; mapa história->folha para virar junto com a narração;
-    e dois PDFs para imprimir em casa: livreto A4 (frente e verso, dobra e grampeia) e A4 uma página por folha."""
-    import pymupdf
-    src = pymupdf.open(od / 'livro.pdf'); n = len(src); folhas = []
-    for i, pg in enumerate(src):
-        nome = f'fl-{i + 1:02d}.jpg'
-        pix = pg.get_pixmap(dpi=120); im = Image.frombytes('RGB', (pix.width, pix.height), pix.samples)
-        im.save(od / nome, 'JPEG', quality=80, optimize=True, progressive=True); folhas.append(nome)
-    limpa = lambda t: re.sub(r'\W+', '', str(t)).lower()
-    textos = [limpa(pg.get_text()) for pg in src]; mapa, j = [], 0
-    for p in h['paginas']:
-        chave = limpa(p.get('texto', ''))[2:42]  # pula a capitular
-        k = next((x for x in range(j, n) if chave and chave in textos[x]), j); mapa.append(k); j = k
-    # livreto: total múltiplo de 4, folhas A4 deitadas com 2 páginas A5; imprimir frente e verso virando na borda curta
-    tot = (n + 3) // 4 * 4; W, H = 842, 595; liv = pymupdf.open()
-    for f in range(tot // 4):
-        for esq, dir_ in ((tot - 1 - 2 * f, 2 * f), (2 * f + 1, tot - 2 - 2 * f)):
-            pg = liv.new_page(width=W, height=H)
-            for idx, r in ((esq, pymupdf.Rect(0, 0, W / 2, H)), (dir_, pymupdf.Rect(W / 2, 0, W, H))):
-                if idx < n: pg.show_pdf_page(r, src, idx)
-    liv.save(od / 'imprimir-livreto-a4.pdf', garbage=3, deflate=True)
-    a4 = pymupdf.open()
-    for i in range(n):
-        pg = a4.new_page(width=595, height=842); pg.show_pdf_page(pg.rect, src, i)
-    a4.save(od / 'imprimir-a4.pdf', garbage=3, deflate=True)
-    log('folhear ok:', n, 'folhas | pdf para imprimir ok')
-    return folhas, mapa
-
-# ---------------- gráfica: livro impresso A5 grampeado (11/10) ----------------
-FICHA = """MINHA LENDA · FICHA PARA A GRÁFICA · pedido {pid}
-
-QUANTIDADE: {qtd} livro(s) iguais
-
-MIOLO ({paginas} páginas A5 = {folhas} folhas A4 frente e verso)
-- Arquivo para gráfica: grafica-miolo-a5.pdf (páginas em ordem, 148 x 210 mm). A gráfica faz a imposição.
-- Ou imprima direto: grafica-miolo-livreto-a4.pdf (já imposto: A4 deitado, 2 páginas por lado,
-  frente e verso virando na BORDA CURTA). Dobre as folhas juntas ao meio.
-- Papel: sulfite/offset 90 g/m² (120 g/m² se quiser mais encorpado), impressão colorida.
-
-CAPA (1 folha por livro, só de um lado: 4x0)
-- grafica-capa-sangria.pdf: A4 deitado com 3 mm de sangria e marcas de corte (303 x 216 mm úteis).
-  Imprimir em A3/SRA3 e refilar nas marcas. Lado esquerdo = contracapa, lado direito = capa.
-- grafica-capa-a4.pdf: a mesma capa no A4 exato, sem sangria (para impressora comum; fica um filete branco).
-- Papel: couché brilho 250 a 300 g/m² ou cartão; plastificação (laminação brilho) opcional.
-
-ACABAMENTO
-- Capa por fora do miolo, dobra ao meio e 2 grampos na dobra (canoa). Refile frontal opcional.
-- Conferir: a página 1 do miolo (título) fica logo depois da capa.
-
-ENTREGA
-{endereco}
-Frete: {frete}
-"""
-
-def _upscale(src, dst, w_px, h_px):
-    """Corta para a proporção e amplia com Lanczos + nitidez leve, para imprimir perto de 300 dpi."""
-    from PIL import ImageFilter, ImageOps
-    im = Image.open(src).convert('RGB')
-    im = ImageOps.fit(im, (w_px, h_px), Image.LANCZOS, centering=(0.5, 0.4))
-    im = im.filter(ImageFilter.UnsharpMask(radius=1.6, percent=60, threshold=2))
-    im.save(dst, 'JPEG', quality=93, subsampling=0)
-
-def grafica(h, ilus, dna, od, pid, pedido):
-    """Kit da gráfica: miolo A5 (múltiplo de 4, completado com páginas de atividade), livreto A4 imposto,
-    capa com sangria e marcas de corte, capa A4 sem sangria e a ficha com papel, quantidade e endereço."""
-    import pymupdf
-    ff = lambda n: (FONTS / n).as_uri()
-    at = {x['pagina']: x['arquivo'] for x in ilus}
-    for x in ilus:  # ilustrações de página em 300 dpi (120 x 170 mm úteis)
-        _upscale(od / x['arquivo'], od / ('p_' + x['arquivo']), 1417, 2008)
-    nome = html.escape(dna['nome']); tit = html.escape(h.get('titulo', ''))
-    col = {'0': 'Coleção Ouvir', '1': 'Coleção Ler Junto', '2': 'Coleção Aventura'}[str(dna.get('fase', '1'))]
-    ded_cli = (dna.get('dedicatoria') or '').strip()  # opcional: só entra se o cliente escreveu
-    body = (f'<section class="rosto"><p class="col">Minha Lenda · {col}</p><h1>{tit}</h1><p class="para">Uma lenda criada especialmente para {nome}</p>'
-            + (f'<p class="ded">{html.escape(ded_cli)}</p>' if ded_cli else '') + '</section>')
-    first = True
-    for i, p in enumerate(h['paginas']):
-        n = int(p.get('n') or i + 1)
-        body += '<section class="pg">' + (f'<h2>{html.escape(p["capitulo"])}</h2>' if p.get('capitulo') else '') + f'<p>{capT(p.get("texto")) if (first or p.get("capitulo")) else html.escape(p.get("texto", ""))}</p></section>'
-        first = False
-        if n in at: body += f'<section class="il"><img src="{(od / ("p_" + at[n])).as_uri()}"></section>'
-    if h.get('gancho_proximo'): body += f'<section class="gancho"><h2>Continua…</h2><p>{html.escape(h["gancho_proximo"])}</p></section>'
-    body += f'<section class="fim"><p>Fim. Até a próxima lenda, {nome}!</p></section>'
-    ATIV = [f'<section class="ativ"><h2>Desenhe aqui a sua cena favorita</h2><div class="moldura"></div><p>Desenhado por {nome}</p></section>',
-            '<section class="ativ"><h2>Escreva um recado para o herói</h2><div class="linhas">' + '<i></i>' * 11 + '</div></section>',
-            '<section class="ativ"><h2>Quem estava nesta aventura?</h2><div class="linhas">' + '<i></i>' * 11 + '</div></section>',
-            '<section class="ativ"><h2>Invente o que acontece depois</h2><div class="moldura"></div></section>']
-    css = f'''@font-face{{font-family:Alegreya;src:url({ff("Alegreya[wght].ttf")});font-weight:400 900}}
-@font-face{{font-family:Alegreya;font-style:italic;src:url({ff("Alegreya-Italic[wght].ttf")});font-weight:400 900}}
-@font-face{{font-family:Unifraktur;src:url({ff("UnifrakturMaguntia-Book.ttf")})}}
-@font-face{{font-family:AlegreyaSans;src:url({ff("AlegreyaSans-Medium.ttf")})}}
-@page{{size:148mm 210mm;margin:16mm 14mm 18mm;@bottom-center{{content:counter(page);font:9pt Alegreya;color:#7a6d8a}}}}
-@page rosto{{@bottom-center{{content:none}}}}
-*{{-webkit-print-color-adjust:exact;print-color-adjust:exact;box-sizing:border-box}}body{{margin:0;font-family:Alegreya;color:#1C1236}}
-section{{break-after:page}}.rosto{{page:rosto;padding-top:46mm;text-align:center}}.rosto .col{{font:700 8.5pt AlegreyaSans;letter-spacing:.14em;text-transform:uppercase;color:#A8710F}}
-.rosto h1{{font:800 24pt/1.12 Alegreya;margin:8mm 0}}.rosto .para{{font:italic 500 13pt Alegreya;color:#5A5070}}
-.rosto .ded{{font:italic 500 13.5pt/1.55 Alegreya;margin:16mm auto 0;max-width:96mm;padding-top:9mm;border-top:.4mm solid #DDA53C;white-space:pre-line}}
-.pg p{{font:500 12.5pt/1.6 Alegreya;margin:0;white-space:pre-line}}.pg h2{{font:800 19pt/1.2 Alegreya;color:#A8710F;text-align:center;margin:0 0 8mm}}
-.cap{{float:left;font-size:3.1em;line-height:.82;margin:5px 7px 0 0;color:#A8710F}}.cap.goth{{font-family:Unifraktur}}.cap.roman{{font-weight:800}}
-.il{{display:flex;align-items:center;justify-content:center;height:170mm}}.il img{{max-width:100%;max-height:170mm;border-radius:3mm}}
-.gancho{{padding-top:50mm;text-align:center}}.gancho h2{{color:#A8710F;font:800 18pt Alegreya}}.gancho p{{font:italic 500 13pt/1.5 Alegreya}}
-.fim{{padding-top:80mm;text-align:center;font:italic 500 14pt Alegreya}}
-.ativ h2{{font:800 16pt Alegreya;color:#A8710F;text-align:center;margin:0 0 6mm}}.ativ .moldura{{height:140mm;border:1.2mm dashed #DDA53C;border-radius:5mm}}
-.ativ p{{text-align:center;font:italic 500 11pt Alegreya;margin-top:4mm}}.ativ .linhas i{{display:block;height:12mm;border-bottom:.4mm solid #c9bfd8}}
-.branco{{}}'''
-    def render(b, out):
-        hp = od / 'grafica-miolo.html'; hp.write_text(f'<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><style>{css}</style></head><body>{b}</body></html>', encoding='utf-8')
-        from playwright.sync_api import sync_playwright
-        with sync_playwright() as pw:
-            br = pw.chromium.launch(); pg = br.new_page(); pg.goto(hp.as_uri()); pg.wait_for_timeout(600)
-            pg.pdf(path=str(out), prefer_css_page_size=True, print_background=True); br.close()
-        return len(pymupdf.open(out))
-    n = render(body, od / 'grafica-miolo-a5.pdf')
-    falta = (-n) % 4
-    if falta:  # completa até múltiplo de 4 com atividades (a última pode ficar em branco no verso)
-        extra = ''.join(ATIV[k % len(ATIV)] for k in range(falta))
-        n = render(body.replace('<section class="fim">', extra + '<section class="fim">'), od / 'grafica-miolo-a5.pdf')
-        if n % 4: n = render(body.replace('<section class="fim">', extra + '<section class="fim">') + '<section class="branco"></section>' * ((-n) % 4), od / 'grafica-miolo-a5.pdf')
-    src = pymupdf.open(od / 'grafica-miolo-a5.pdf'); n = len(src)
-    W, H = 842, 595; liv = pymupdf.open()
-    for f in range(n // 4):
-        for esq, dir_ in ((n - 1 - 2 * f, 2 * f), (2 * f + 1, n - 2 - 2 * f)):
-            pg = liv.new_page(width=W, height=H)
-            for idx, r in ((esq, pymupdf.Rect(0, 0, W / 2, H)), (dir_, pymupdf.Rect(W / 2, 0, W, H))):
-                pg.show_pdf_page(r, src, idx)
-    liv.save(od / 'grafica-miolo-livreto-a4.pdf', garbage=3, deflate=True)
-    # capa: A4 deitado (297 x 210) + 3 mm de sangria + 8 mm de margem para as marcas de corte
-    mm = 72 / 25.4; S, M = 3, 8; CW, CH = 297 + 2 * S, 210 + 2 * S; PW, PH = CW + 2 * M, CH + 2 * M
-    _upscale(od / 'capa.jpg', od / 'capa_print.jpg', round((148.5 + S) / 25.4 * 300), round(CH / 25.4 * 300))
-    import segno
-    qr = od / 'qr.svg'; segno.make('https://minhalenda.com.br/?o=livro', error='m').save(str(qr), scale=4, border=2, dark='#1C1236', light='#F3EDE2')
-    logo = (pathlib.Path(__file__).parent / 'logo.svg').as_uri()
-    capa_html = f'''<!doctype html><html><head><meta charset="utf-8"><style>
-@font-face{{font-family:Alegreya;src:url({ff("Alegreya[wght].ttf")});font-weight:400 900}}@font-face{{font-family:Alegreya;font-style:italic;src:url({ff("Alegreya-Italic[wght].ttf")});font-weight:400 900}}
-@font-face{{font-family:AlegreyaSans;src:url({ff("AlegreyaSans-Medium.ttf")})}}
-@page{{size:{CW}mm {CH}mm;margin:0}}*{{box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}}body{{margin:0}}
-.w{{position:relative;width:{CW}mm;height:{CH}mm;overflow:hidden;display:flex}}
-.back{{position:relative;width:{148.5 + S}mm;height:100%;background:radial-gradient(circle at 78% 12%,#2a2160 0,#121D42 55%);color:#F3EDE2;padding:{S + 16}mm 16mm {S + 14}mm {S + 16}mm;display:flex;flex-direction:column;gap:7mm;text-align:left}}
-.back .logo{{height:14mm;align-self:flex-start}}.back .mid{{margin:auto 0;display:flex;flex-direction:column;gap:6mm}}
-.back h2{{font:800 22pt/1.12 Alegreya;margin:0;color:#F3EDE2}}.back h2 b{{color:#DDA53C;font-weight:800}}
-.back p{{font:500 12.2pt/1.5 Alegreya;margin:0;color:#D9D2E6}}.back p b{{color:#F3EDE2}}
-.back .cta{{display:flex;gap:6mm;align-items:center;border-top:.35mm solid #DDA53C80;padding-top:6mm}}
-.back .cta img{{width:25mm;height:25mm;border-radius:2mm}}
-.back .cta .k{{font:700 7.6pt AlegreyaSans;letter-spacing:.16em;text-transform:uppercase;color:#DDA53C;margin-bottom:1.5mm}}
-.back .cta .h{{font:800 15pt Alegreya;color:#F3EDE2;margin:0}}.back .cta .u{{font:700 10.5pt AlegreyaSans;color:#F3EDE2;margin-top:1.5mm}}
-.back .para{{font:italic 500 9.5pt Alegreya;color:#A79FBD;text-align:center;margin-top:-2mm}}
-.front{{position:relative;width:{148.5 + S}mm;height:100%;background:#121D42 url({(od / "capa_print.jpg").as_uri()}) center 40%/cover}}
-.front h1{{position:absolute;left:0;right:0;top:0;margin:0;padding:{S + 12}mm {S + 12}mm 30mm 12mm;text-align:center;font:800 24pt/1.1 Alegreya;color:#fff;background:linear-gradient(#0b0820d9,transparent)}}
-.front .c{{position:absolute;left:0;right:0;bottom:{S + 8}mm;text-align:center;font:700 8pt AlegreyaSans;letter-spacing:.16em;text-transform:uppercase;color:#FFE7A3;text-shadow:0 1px 3px #000a}}
-</style></head><body><div class="w"><div class="back">
-<img class="logo" src="{logo}" alt="Minha Lenda">
-<div class="mid"><h2>Toda criança tem histórias.<br><b>Aqui, elas viram lendas.</b></h2>
-<p>Cada livro da Minha Lenda é escrito do zero para uma criança só: com o nome dela, as pessoas que ela ama, o bichinho de casa e os desafios que ela está vivendo. Nenhuma história se repete.</p>
-<p><b>Ler junto todos os dias</b> amplia o vocabulário, acalma a hora de dormir e aproxima a família. E quando a história fala sobre ela, ler deixa de ser tarefa e vira vontade.</p></div>
-<div class="cta"><img src="{qr.as_uri()}" alt=""><div><div class="k">Siga e conheça as próximas aventuras</div><p class="h">@minhalenda</p><div class="u">Instagram · TikTok · YouTube<br>minhalenda.com.br</div></div></div>
-<p class="para">Uma lenda criada especialmente para {nome}.</p></div>
-<div class="front"><h1>{tit}</h1><div class="c">Minha Lenda · {col}</div></div></div></body></html>'''
-    hp = od / 'grafica-capa.html'; hp.write_text(capa_html, encoding='utf-8')
-    from playwright.sync_api import sync_playwright
-    with sync_playwright() as pw:
-        br = pw.chromium.launch(); pg = br.new_page(); pg.goto(hp.as_uri()); pg.wait_for_timeout(600)
-        pg.pdf(path=str(od / 'capa_arte.pdf'), prefer_css_page_size=True, print_background=True); br.close()
-    arte = pymupdf.open(od / 'capa_arte.pdf')
-    doc = pymupdf.open(); pg = doc.new_page(width=PW * mm, height=PH * mm)
-    pg.show_pdf_page(pymupdf.Rect(M * mm, M * mm, (M + CW) * mm, (M + CH) * mm), arte, 0)
-    x0, y0, x1, y1 = (M + S) * mm, (M + S) * mm, (M + S + 297) * mm, (M + S + 210) * mm; L, G = 6 * mm, 1 * mm
-    for x in (x0, x1):
-        pg.draw_line((x, 0), (x, y0 - S * mm - G), width=.3); pg.draw_line((x, y1 + S * mm + G), (x, PH * mm), width=.3)
-    for y in (y0, y1):
-        pg.draw_line((0, y), (x0 - S * mm - G, y), width=.3); pg.draw_line((x1 + S * mm + G, y), (PW * mm, y), width=.3)
-    xm = (x0 + x1) / 2  # marca da dobra
-    pg.draw_line((xm, 0), (xm, y0 - S * mm - G), width=.3, dashes='[2 2] 0'); pg.draw_line((xm, y1 + S * mm + G), (xm, PH * mm), width=.3, dashes='[2 2] 0')
-    pg.insert_text((x0, 5.5 * mm), f'Minha Lenda {pid} · capa 4x0 couché 250-300 g · sangria 3 mm · refilar nas marcas · tracejado = dobra', fontsize=6)
-    doc.save(od / 'grafica-capa-sangria.pdf', garbage=3, deflate=True)
-    a4 = pymupdf.open(); pg = a4.new_page(width=297 * mm, height=210 * mm)
-    pg.show_pdf_page(pg.rect, arte, 0, clip=pymupdf.Rect(S * mm, S * mm, (S + 297) * mm, (S + 210) * mm))
-    a4.save(od / 'grafica-capa-a4.pdf', garbage=3, deflate=True)
-    e = json.loads(pedido.get('endereco_json') or '{}')
-    endereco = f"{e.get('destinatario') or ''}\n{e.get('rua', '')}, {e.get('numero', '')} {e.get('compl') or ''}\n{e.get('bairro', '')} · {e.get('cidade', '')}/{e.get('uf', '')} · CEP {e.get('cep', '')}"
-    (od / 'grafica-ficha.txt').write_text(FICHA.format(pid=pid, qtd=1 + int(pedido.get('copias') or 0), paginas=n, folhas=n // 4, endereco=endereco,
-        frete=pedido.get('frete_info') or '-'), encoding='utf-8')
-    log('gráfica ok:', n, 'páginas,', n // 4, 'folhas A4 + capa')
-    return ['grafica-miolo-a5.pdf', 'grafica-miolo-livreto-a4.pdf', 'grafica-capa-sangria.pdf', 'grafica-capa-a4.pdf', 'grafica-ficha.txt']
+# PDF, páginas, impressão e gráfica: ver livro.py (diagramação única, 14/10/2026)
 
 # ---------------- áudio ----------------
 KEY = None
@@ -425,12 +197,37 @@ def narrar(h, dna, od):
 
 def subir(pid, od, nomes):
     for n in nomes:
-        ct = 'application/pdf' if n.endswith('.pdf') else 'audio/mpeg' if n.endswith('.mp3') else 'text/plain; charset=utf-8' if n.endswith('.txt') else 'image/jpeg'
+        ct = 'application/pdf' if n.endswith('.pdf') else 'audio/mpeg' if n.endswith('.mp3') else 'text/plain; charset=utf-8' if n.endswith('.txt') else 'application/json' if n.endswith('.json') else 'image/jpeg'
         api(f'/admin/api/pedido/{pid}/arquivo/{n}', raw=(od / n).read_bytes(), method='PUT', ctype=ct, timeout=600)
 
-def produzir(pid):
+def baixar(pid, nome, dst):
+    for k in range(3):
+        try:
+            h = {'authorization': oidc() if AUTH == 'oidc' else AUTH, 'user-agent': 'MinhaLenda-Executor/1.0'}
+            dst.write_bytes(urllib.request.urlopen(urllib.request.Request(f'{SITE}/admin/api/pedido/{pid}/arquivo/{nome}', headers=h), timeout=120).read()); return
+        except Exception:
+            if k == 2: raise
+            time.sleep(4)
+
+def rediagramar(pid):
+    """Refaz só a diagramação (livro, PDFs, páginas e kit da gráfica) de um pedido entregue, com o texto e as ilustrações que já existem."""
     p = api(f'/admin/api/pedido/{pid}')
-    if p['status'] in ('entregue',): log(pid, 'já entregue'); return
+    r = json.loads(p.get('resultado_json') or '{}'); lv = r.get('livro') or {}
+    if not lv.get('paginas'): raise RuntimeError('pedido sem livro para rediagramar')
+    dados = json.loads(p['dados_json']); dna = dados['dna']
+    if dados.get('dedicatoria'): dna['dedicatoria'] = dados['dedicatoria']
+    od = OUT / pid; od.mkdir(parents=True, exist_ok=True)
+    ilus = lv.get('ilustracoes') or []
+    for n in ['capa.jpg'] + [x['arquivo'] for x in ilus]: baixar(pid, n, od / n)
+    h = {'titulo': lv.get('titulo'), 'dedicatoria': lv.get('dedicatoria'), 'gancho_proximo': lv.get('gancho_proximo'), 'paginas': lv['paginas']}
+    d = livro_mod.montar(h, ilus, dna, od, pid=pid, pedido=p, log=log)
+    subir(pid, od, ['livro.pdf', 'imprimir-livreto-a4.pdf', 'imprimir-a4.pdf'] + d['folhas'] + d['kit'])
+    api(f'/admin/api/pedido/{pid}', {'resultado_merge': {'folhas': len(d['folhas']), 'folha_de': d['folha_de'], 'grafica': d['kit'], 'diagramacao': 2}})
+    log(pid, 'REDIAGRAMADO', len(d['folhas']), 'páginas')
+
+def produzir(pid, refazer=False):
+    p = api(f'/admin/api/pedido/{pid}')
+    if p['status'] in ('entregue',) and not refazer: log(pid, 'já entregue'); return
     api(f'/admin/api/pedido/{pid}', {'status': 'produzindo'})
     try:
         dados = json.loads(p['dados_json']); dna = dados['dna']; estilo = dados.get('estilo') or 'pintura'
@@ -442,25 +239,30 @@ def produzir(pid):
         h, crit = escrever(dna)
         (od / 'historia.json').write_text(json.dumps(h, ensure_ascii=False, indent=1), encoding='utf-8')
         ilus = ilustrar(h, dna, p['foto_b64'], estilo, od)
-        pdf(h, ilus, dna, od)
-        folhas, mapa = folhear(h, od)
-        kit = grafica(h, ilus, dna, od, pid, p) if p.get('produto') == 'impresso' else []
+        d = livro_mod.montar(h, ilus, dna, od, pid=pid, pedido=p, log=log)
+        folhas, mapa, kit = d['folhas'], d['folha_de'], d['kit']
         marcas = narrar(h, dna, od)
-        nomes = ['capa.jpg', 'livro.pdf', 'audiolivro.mp3', 'imprimir-livreto-a4.pdf', 'imprimir-a4.pdf'] + [x['arquivo'] for x in ilus] + folhas + kit
+        nomes = ['capa.jpg', 'livro.pdf', 'audiolivro.mp3', 'imprimir-livreto-a4.pdf', 'imprimir-a4.pdf', 'historia.json'] + [x['arquivo'] for x in ilus] + folhas + kit
         subir(pid, od, nomes)
         livro = {'titulo': h.get('titulo'), 'dedicatoria': h.get('dedicatoria'), 'gancho_proximo': h.get('gancho_proximo'),
                  'paginas': [{'n': x.get('n'), 'capitulo': x.get('capitulo'), 'texto': x.get('texto')} for x in h['paginas']], 'ilustracoes': ilus}
-        api(f'/admin/api/pedido/{pid}', {'status': 'entregue', 'resultado': {'capa': 'capa.jpg', 'livro': livro, 'marcas': marcas, 'nota': crit.get('media'), 'folhas': len(folhas), 'folha_de': mapa, 'imprimir': True, 'grafica': kit}})
+        api(f'/admin/api/pedido/{pid}', {'status': 'entregue', 'resultado': {'capa': 'capa.jpg', 'livro': livro, 'marcas': marcas, 'nota': crit.get('media'), 'folhas': len(folhas), 'folha_de': mapa, 'imprimir': True, 'grafica': kit, 'diagramacao': 2}})
         log(pid, 'ENTREGUE', f'{SITE}/l/{p["token"]}', privado=True)
     except Exception as e:
         api(f'/admin/api/pedido/{pid}', {'status': 'falhou', 'erro': str(e)[:700]}); raise
 
 if __name__ == '__main__':
     AUTH = admin_auth(); KEY = None if CI_OIDC else gemini_key()
-    ids = sys.argv[1:] or [x['id'] for x in api('/admin/api/pedidos?status=fila')['pedidos']]
-    log('pedidos:', ids or 'nenhum')
+    args = [a for a in sys.argv[1:] if a]
+    modo = 'produzir'
+    if args and args[0].startswith('--'): modo = args.pop(0)[2:]
+    modo = os.environ.get('MODO') or modo
+    ids = args or [x['id'] for x in api('/admin/api/pedidos?status=fila')['pedidos']]
+    log('pedidos:', ids or 'nenhum', '| modo:', modo)
     for pid in ids:
-        try: produzir(pid)
+        try:
+            if modo == 'rediagramar': rediagramar(pid)
+            else: produzir(pid, refazer=(modo == 'refazer'))
         except Exception as e:
             # tipo do erro no log público; a mensagem completa vai para o painel e para o e-mail de aviso
             log(pid, 'FALHOU', type(e).__name__, str(e)[:160] if str(e).startswith('motor/') else '')
