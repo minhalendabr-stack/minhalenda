@@ -59,6 +59,14 @@ def admin_auth():
     raise SystemExit('senha do admin não encontrada')
 
 AUTH = None
+# custo por livro (14/10): tokens por modelo, imagens e áudio; o admin converte em R$ com a tabela de preços
+USO = {}
+def uso(model, tin=0, tout=0, n=1, img=0):
+    u = USO.setdefault(model, {'in': 0, 'out': 0, 'n': 0, 'img': 0})
+    u['in'] += int(tin or 0); u['out'] += int(tout or 0); u['n'] += n; u['img'] += img
+def uso_resp(r):
+    for x in (r or {}).get('usage') or []: uso(x.get('model', '?'), x.get('in'), x.get('out'), img=int(x.get('img') or 0))
+    return r
 def api(path, body=None, method=None, raw=None, ctype=None, tries=3, timeout=300):
     for k in range(tries):
         try:
@@ -80,18 +88,18 @@ def log(*a, privado=False):
 
 # ---------------- história ----------------
 def escrever(dna):
-    pl = api('/admin/api/plano', dna)
+    pl = uso_resp(api('/admin/api/plano', dna))
     if 'plan' not in pl: raise RuntimeError('motor/plano: ' + str(pl.get('erro') or pl)[:300])
     plan = pl['plan']
-    tx = api('/admin/api/texto', {'dna': dna, 'plan': plan})
+    tx = uso_resp(api('/admin/api/texto', {'dna': dna, 'plan': plan}))
     if 'txt' not in tx: raise RuntimeError('motor/texto: ' + str(tx.get('erro') or tx)[:300])
     montar = lambda: {**plan, 'paginas': tx['txt'].get('paginas') or [], 'gancho_proximo': tx['txt'].get('gancho_proximo') or ''}
-    cr = api('/admin/api/critica', {'dna': dna, 'h': montar()}); rev = 0
+    cr = uso_resp(api('/admin/api/critica', {'dna': dna, 'h': montar()})); rev = 0
     longo = lambda: any('Texto longo' in str(x) for x in (cr.get('probs') or []))
     # tamanho travado por faixa (09/10): texto longo ganha uma revisão a mais só para cortar
     while not cr.get('aprovada') and rev < (2 if dna.get('enredo_livre') or longo() else 1):
-        tx = api('/admin/api/texto', {'dna': dna, 'plan': plan, 'rev': {'probs': cr.get('probs'), 'anterior': tx['txt'].get('paginas')}})
-        cr = api('/admin/api/critica', {'dna': dna, 'h': montar()}); rev += 1
+        tx = uso_resp(api('/admin/api/texto', {'dna': dna, 'plan': plan, 'rev': {'probs': cr.get('probs'), 'anterior': tx['txt'].get('paginas')}}))
+        cr = uso_resp(api('/admin/api/critica', {'dna': dna, 'h': montar()})); rev += 1
     h = montar()
     reais = [e['nome'].lower() for e in dna.get('elenco') or []]
     for e in h.get('elenco_visual') or []:
@@ -107,7 +115,7 @@ def jpeg_b64(b64, maxw=768, q=86):
     o = io.BytesIO(); im.save(o, 'JPEG', quality=q); return base64.b64encode(o.getvalue()).decode()
 
 def ilustrar(h, dna, foto, estilo, od):
-    f = api('/admin/api/imagem', {'tipo': 'ficha', 'foto': foto, 'estilo': estilo, 'figurino': h.get('figurino_heroi_en'), 'nome': dna['nome']})
+    f = uso_resp(api('/admin/api/imagem', {'tipo': 'ficha', 'foto': foto, 'estilo': estilo, 'figurino': h.get('figurino_heroi_en'), 'nome': dna['nome']}))
     ficha = jpeg_b64(f['img'])
     ev = h.get('elenco_visual') or []
     def quem_de(nomes): return [e for e in ev if any(n and e.get('nome') and (e['nome'] in n or n in e['nome']) for n in (nomes or []))][:2]
@@ -118,7 +126,7 @@ def ilustrar(h, dna, foto, estilo, od):
         nome, extra = j; pagina = extra.pop('pagina', None)
         for tent in range(3):
             try:
-                r = api('/admin/api/imagem', {**extra, 'foto': foto, 'ficha': ficha, 'estilo': estilo, 'figurino': h.get('figurino_heroi_en'), 'mundo': h.get('mundo_visual_en') or '', 'nome': dna['nome']}, tries=1)
+                r = uso_resp(api('/admin/api/imagem', {**extra, 'foto': foto, 'ficha': ficha, 'estilo': estilo, 'figurino': h.get('figurino_heroi_en'), 'mundo': h.get('mundo_visual_en') or '', 'nome': dna['nome']}, tries=1))
                 im = Image.open(io.BytesIO(base64.b64decode(r['img']))).convert('RGB'); im.thumbnail((1600, 1600))
                 im.save(od / f'{nome}.jpg', 'JPEG', quality=87, optimize=True, progressive=True)
                 return nome, pagina
@@ -146,6 +154,7 @@ def tts(text, voice):
                 else:
                     r = api('/admin/api/tts', {'model': 'gemini-3.1-flash-tts-preview', 'body': body}, tries=1, timeout=240)
                 p = r['candidates'][0]['content']['parts'][0]['inlineData']; pcm = base64.b64decode(p['data'])
+                um = r.get('usageMetadata') or {}; uso('gemini-3.1-flash-tts-preview', um.get('promptTokenCount'), um.get('candidatesTokenCount'))
                 if len(pcm) < 24000: raise RuntimeError('áudio vazio')
                 rate = int(p.get('mimeType', '').split('rate=')[1].split(';')[0]) if 'rate=' in p.get('mimeType', '') else 24000
                 with wave.open(str(c), 'wb') as w: w.setnchannels(1); w.setsampwidth(2); w.setframerate(rate); w.writeframes(pcm)
@@ -168,8 +177,12 @@ def narrar(h, dna, od):
         t = (f"{p['capitulo']}. " if p.get('capitulo') else '') + str(p.get('texto', ''))
         if i == 0 and not p.get('capitulo'): t = f"{h.get('titulo','')}. {t}"
         partes.append(t)
+    g = str(h.get('gancho_proximo') or '').strip()
+    if g and '?' not in g[-3:]: g += ' O que será que vem por aí?'
+    teaser = f"Ei… ainda está aí? Então escute só, bem baixinho: {g}" if g else ''
     with cf.ThreadPoolExecutor(4) as ex:
-        wavs = list(ex.map(lambda t: tts(t, voice), [abre] + partes + [fecha]))
+        wavs = list(ex.map(lambda t: tts(t, voice), [abre] + partes + [fecha] + ([teaser] if teaser else [])))
+    wt = wavs.pop() if teaser else None
     tmp = pathlib.Path(tempfile.mkdtemp(dir=od))
     std = ['-ar', '44100', '-ac', '2']
     af = (f'rubberband=tempo={tempo}:pitchq=quality,' if tempo != 1 else '') + 'aresample=44100'
@@ -187,13 +200,22 @@ def narrar(h, dna, od):
     subprocess.run(['ffmpeg', '-v', 'error', '-y', '-stream_loop', '2', '-i', str(MUSICA), '-t', str(lo + 10), '-af', f"volume='if(lt(t,{lo + 0.8}),0.12,1)':eval=frame,afade=t=in:d=0.6,afade=t=out:st={lo + 6.5}:d=3.5", *std, str(tmp / 'bed2.wav')], check=True)
     subprocess.run(['ffmpeg', '-v', 'error', '-y', '-i', str(tmp / 'bed2.wav'), '-i', str(fe), '-filter_complex', '[1]adelay=400|400[v];[0][v]amix=inputs=2:duration=first:normalize=0[o]', '-map', '[o]', *std, str(tmp / 'outro.wav')], check=True)
     ordem = [tmp / 'intro.wav'] + segs + [tmp / 'outro.wav']
+    if wt:  # depois da propaganda, a narração volta para o teaser da próxima aventura, com a trilha baixinha
+        tv = tmp / 'teaser_v.wav'
+        subprocess.run(['ffmpeg', '-v', 'error', '-y', '-i', str(wt), '-af', (f'rubberband=tempo={tempo}:pitchq=quality,' if tempo != 1 else '') + 'aresample=44100', *std, str(tv)], check=True)
+        lt = dur(tv)
+        subprocess.run(['ffmpeg', '-v', 'error', '-y', '-stream_loop', '3', '-i', str(MUSICA), '-t', str(lt + 4.5), '-af', f"volume=0.09,afade=t=in:d=1.2,afade=t=out:st={lt + 1.6}:d=2.8", *std, str(tmp / 'bed3.wav')], check=True)
+        subprocess.run(['ffmpeg', '-v', 'error', '-y', '-i', str(tmp / 'bed3.wav'), '-i', str(tv), '-filter_complex', '[1]adelay=900|900[v];[0][v]amix=inputs=2:duration=first:normalize=0[o]', '-map', '[o]', *std, str(tmp / 'teaser.wav')], check=True)
+        ordem.append(tmp / 'teaser.wav')
     marcas, t = [], dur(tmp / 'intro.wav')
     for s in segs: marcas.append(round(t, 2)); t += dur(s)
+    extra = {'fim': round(t, 2)}
+    if wt: extra['teaser'] = round(t + dur(tmp / 'outro.wav'), 2)
     lst = tmp / 'lista.txt'; lst.write_text(''.join(f"file '{p}'\n" for p in ordem))
     subprocess.run(['ffmpeg', '-v', 'error', '-y', '-f', 'concat', '-safe', '0', '-i', str(lst), '-af', 'loudnorm=I=-16:TP=-1.5:LRA=9', '-ar', '44100', '-b:a', '128k', str(od / 'audiolivro.mp3')], check=True)
     # loudnorm de duas passadas não muda o tempo: as marcas continuam válidas
     log('áudio ok:', round(dur(od / 'audiolivro.mp3') / 60, 1), 'min')
-    return marcas
+    return marcas, extra
 
 def subir(pid, od, nomes):
     for n in nomes:
@@ -236,17 +258,18 @@ def produzir(pid, refazer=False):
         if not p.get('foto_b64'): raise RuntimeError('pedido sem foto')
         od = OUT / pid; od.mkdir(parents=True, exist_ok=True)
         log(pid, dna['nome'], 'idade', dna.get('idade'), 'história', dna.get('familia'), dna.get('historia'), privado=True)
+        USO.clear()
         h, crit = escrever(dna)
         (od / 'historia.json').write_text(json.dumps(h, ensure_ascii=False, indent=1), encoding='utf-8')
         ilus = ilustrar(h, dna, p['foto_b64'], estilo, od)
         d = livro_mod.montar(h, ilus, dna, od, pid=pid, pedido=p, log=log)
         folhas, mapa, kit = d['folhas'], d['folha_de'], d['kit']
-        marcas = narrar(h, dna, od)
+        marcas, marcas_extra = narrar(h, dna, od)
         nomes = ['capa.jpg', 'livro.pdf', 'audiolivro.mp3', 'imprimir-livreto-a4.pdf', 'imprimir-a4.pdf', 'historia.json'] + [x['arquivo'] for x in ilus] + folhas + kit
         subir(pid, od, nomes)
         livro = {'titulo': h.get('titulo'), 'dedicatoria': h.get('dedicatoria'), 'gancho_proximo': h.get('gancho_proximo'),
                  'paginas': [{'n': x.get('n'), 'capitulo': x.get('capitulo'), 'texto': x.get('texto')} for x in h['paginas']], 'ilustracoes': ilus}
-        api(f'/admin/api/pedido/{pid}', {'status': 'entregue', 'resultado': {'capa': 'capa.jpg', 'livro': livro, 'marcas': marcas, 'nota': crit.get('media'), 'folhas': len(folhas), 'folha_de': mapa, 'imprimir': True, 'grafica': kit, 'diagramacao': 2}})
+        api(f'/admin/api/pedido/{pid}', {'status': 'entregue', 'resultado': {'capa': 'capa.jpg', 'livro': livro, 'marcas': marcas, 'nota': crit.get('media'), 'folhas': len(folhas), 'folha_de': mapa, 'imprimir': True, 'grafica': kit, 'diagramacao': 2, 'marcas_extra': marcas_extra, 'uso': USO}})
         log(pid, 'ENTREGUE', f'{SITE}/l/{p["token"]}', privado=True)
     except Exception as e:
         api(f'/admin/api/pedido/{pid}', {'status': 'falhou', 'erro': str(e)[:700]}); raise
