@@ -114,9 +114,12 @@ def jpeg_b64(b64, maxw=768, q=86):
     im = Image.open(io.BytesIO(base64.b64decode(b64))).convert('RGB'); im.thumbnail((maxw, maxw))
     o = io.BytesIO(); im.save(o, 'JPEG', quality=q); return base64.b64encode(o.getvalue()).decode()
 
-def ilustrar(h, dna, foto, estilo, od):
-    f = uso_resp(api('/admin/api/imagem', {'tipo': 'ficha', 'foto': foto, 'estilo': estilo, 'figurino': h.get('figurino_heroi_en'), 'nome': dna['nome']}))
-    ficha = jpeg_b64(f['img'])
+def ilustrar(h, dna, foto, estilo, od, ficha=None):
+    # ficha do herói: gerada da foto no livro 1; no Clube, os livros seguintes reaproveitam a do livro 1 (a foto já foi apagada)
+    if not ficha:
+        f = uso_resp(api('/admin/api/imagem', {'tipo': 'ficha', 'foto': foto, 'estilo': estilo, 'figurino': h.get('figurino_heroi_en'), 'nome': dna['nome']}))
+        ficha = jpeg_b64(f['img'])
+    (od / 'ficha.jpg').write_bytes(base64.b64decode(ficha))
     ev = h.get('elenco_visual') or []
     def quem_de(nomes): return [e for e in ev if any(n and e.get('nome') and (e['nome'] in n or n in e['nome']) for n in (nomes or []))][:2]
     jobs = [('capa', {'tipo': 'capa', 'cena': h.get('capa_cena_en'), 'elenco': [e for e in ev if not e.get('real')][:1]})]
@@ -255,17 +258,21 @@ def produzir(pid, refazer=False):
         dados = json.loads(p['dados_json']); dna = dados['dna']; estilo = dados.get('estilo') or 'pintura'
         if dados.get('competencia'): dna['competencia'] = dados['competencia']
         if dados.get('dedicatoria'): dna['dedicatoria'] = dados['dedicatoria']
-        if not p.get('foto_b64'): raise RuntimeError('pedido sem foto')
         od = OUT / pid; od.mkdir(parents=True, exist_ok=True)
+        foto, ficha = p.get('foto_b64'), None
+        if not foto and dados.get('ficha_de'):
+            baixar(dados['ficha_de'], 'ficha.jpg', od / 'ficha_ref.jpg')
+            ficha = jpeg_b64(base64.b64encode((od / 'ficha_ref.jpg').read_bytes()).decode()); foto = ficha
+        if not foto: raise RuntimeError('pedido sem foto')
         log(pid, dna['nome'], 'idade', dna.get('idade'), 'história', dna.get('familia'), dna.get('historia'), privado=True)
         USO.clear()
         h, crit = escrever(dna)
         (od / 'historia.json').write_text(json.dumps(h, ensure_ascii=False, indent=1), encoding='utf-8')
-        ilus = ilustrar(h, dna, p['foto_b64'], estilo, od)
+        ilus = ilustrar(h, dna, foto, estilo, od, ficha)
         d = livro_mod.montar(h, ilus, dna, od, pid=pid, pedido=p, log=log)
         folhas, mapa, kit = d['folhas'], d['folha_de'], d['kit']
         marcas, marcas_extra = narrar(h, dna, od)
-        nomes = ['capa.jpg', 'livro.pdf', 'audiolivro.mp3', 'imprimir-livreto-a4.pdf', 'imprimir-a4.pdf', 'historia.json'] + [x['arquivo'] for x in ilus] + folhas + kit
+        nomes = ['capa.jpg', 'ficha.jpg', 'livro.pdf', 'audiolivro.mp3', 'imprimir-livreto-a4.pdf', 'imprimir-a4.pdf', 'historia.json'] + [x['arquivo'] for x in ilus] + folhas + kit
         subir(pid, od, nomes)
         livro = {'titulo': h.get('titulo'), 'dedicatoria': h.get('dedicatoria'), 'gancho_proximo': h.get('gancho_proximo'),
                  'paginas': [{'n': x.get('n'), 'capitulo': x.get('capitulo'), 'texto': x.get('texto')} for x in h['paginas']], 'ilustracoes': ilus}
