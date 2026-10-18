@@ -87,6 +87,7 @@ body{font-family:Alegreya;color:#1C1236;font-kerning:normal;text-rendering:geome
 .cap{float:left;font-family:Gotica;font-weight:400;color:var(--goldd);font-size:3.55em;line-height:.8;margin:.06em .1em 0 0;padding-top:.02em}
 .cap.r{font-family:Alegreya;font-weight:800;font-size:3.25em;line-height:.78;margin:.05em .08em 0 0}
 .vig{flex:1 1 0;min-height:0;overflow:hidden;display:flex;align-items:flex-end;justify-content:center}
+.vig.g i{max-height:88mm}
 .vig i{display:block;width:100%%;height:calc(100%% - 7mm);max-height:52mm;background:#E9DEC6;-webkit-mask:var(--m) center bottom/contain no-repeat;mask:var(--m) center bottom/contain no-repeat}
 /* capítulo */
 .chap{text-align:center;margin:0 0 6.5mm}
@@ -148,6 +149,9 @@ body{font-family:Alegreya;color:#1C1236;font-kerning:normal;text-rendering:geome
 .atv .ass{font:italic 500 11pt Alegreya;color:var(--ink2);text-align:center;margin-top:4mm}
 .atv ul{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:1fr 1fr;gap:3.2mm 6mm}
 .atv li{display:flex;align-items:center;gap:3mm;font:500 12pt Alegreya}.atv li b{width:5.5mm;height:5.5mm;border:.45mm solid var(--goldd);border-radius:1.2mm;flex:none}
+.atv h3{font:800 14.5pt/1.15 Alegreya;margin:2mm 0 4mm;text-align:center;color:var(--ink)}
+.meia .meia1{flex:0 0 auto;padding-bottom:5mm;border-bottom:.35mm solid var(--hair);margin-bottom:5mm}.meia .meia1 ul{gap:2.4mm 6mm}.meia .meia1 li{font-size:11pt}
+.meia .meia2{flex:1;display:flex;flex-direction:column;min-height:0}.meia .meia2 h3{margin-top:0}.meia .ass{margin-top:3mm}
 .cert{position:absolute;inset:14mm 13mm 24mm;border:.5mm solid var(--gold);border-radius:4mm;padding:3mm}
 .cert .in2{border:.25mm solid var(--hair);border-radius:2.6mm;height:100%%;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:8mm}
 .cert .k{font:800 7.4pt Sans;letter-spacing:.24em;text-transform:uppercase;color:var(--goldd)}
@@ -212,56 +216,86 @@ def _paginas(h, ilus, dna, od, cfg, so_ilustra=frozenset(), grafica=False):
     P.append(('rosto', f'<div class="in"><img class="hat" src="{uri(SIL / "simbolo.svg")}" alt=""><div class="k">Minha Lenda · {esc(col)}</div>'
                        f'<h1>{gtitulo(h.get("titulo", ""))}</h1><p class="para">Uma lenda criada especialmente para {nome}</p>'
                        + (f'<p class="ded">{esc(ded)}</p>' if ded else '') + '</div><div class="site">minhalenda.com.br</div>', '', None))
+    # Miolo fechado em múltiplo de 4 (Ler Junto, 6 a 8 anos: 20 páginas = 5 folhas): rosto + história + Fim + certificado + "quem apareceu/desenho".
+    # Se faltar página, as páginas só de texto mais longas se dividem em duas (cada metade ganha vinheta em marca d'água);
+    # só se não houver o que dividir entram atividades extras.
+    n_ilus = sum(1 for i, p in enumerate(h['paginas']) if at.get(int(p.get('n') or i + 1)))
+    miolo = 1 + len(h['paginas']) + len([i for i in so_ilustra if i < len(h['paginas'])]) + 1 + 2
+    falta = (-miolo) % 4
+    def _pal(t): return len(re.findall(r'[\wÀ-ÿ]+', str(t or '')))
+    cands = sorted([i for i, p in enumerate(h['paginas']) if not at.get(int(p.get('n') or i + 1)) and _pal(p.get('texto')) >= 60],
+                   key=lambda i: -_pal(h['paginas'][i].get('texto')))
+    dividir = set(cands[:falta]); falta -= len(dividir)
+
+    def _metades(txt):
+        ps = [x.strip() for x in re.split(r'\n+', str(txt or '')) if x.strip()]
+        if len(ps) < 2:
+            ps = [x.strip() for x in re.split(r'(?<=[.!?…])\s+', ps[0] if ps else '') if x.strip()]
+            sep = ' '
+        else: sep = '\n'
+        tot = sum(_pal(x) for x in ps); acc = 0; k = 1
+        for j, x in enumerate(ps[:-1]):
+            acc += _pal(x)
+            if acc >= tot / 2: k = j + 1; break
+        return sep.join(ps[:k]), sep.join(ps[k:])
+
     nc = 0
     for i, p in enumerate(h['paginas']):
         n = int(p.get('n') or i + 1)
         capitulo = (p.get('capitulo') or '').strip()
         if capitulo: nc += 1
         chap = (f'<div class="chap"><div class="k">Capítulo {nc}</div><h2>{esc(capitulo)}</h2><div class="orn"><i></i><b></b><i></i></div></div>' if capitulo else '')
-        txt = f'<div class="txt">{paragrafos(p.get("texto"), capitular=bool(capitulo) or i == 0)}</div>'
+        texto = p.get("texto")
         img = at.get(n)
         if img and i in so_ilustra:
             P.append(('so', f'<div class="fig"><img src="{uri(od / img)}" alt=""></div><div class="leg"><div class="orn"><i></i><b></b><i></i></div></div>', '', None))
             img = None
         if img:
+            txt = f'<div class="txt">{paragrafos(texto, capitular=bool(capitulo) or i == 0)}</div>'
             P.append(('hist ill', f'<div class="fig"><img src="{uri(od / img)}" alt="">{wave}</div><div class="box" >{chap}{txt}</div>', '', i))
+        elif i in dividir:
+            t1, t2 = _metades(texto)
+            for k2, tt in enumerate((t1, t2)):
+                v = vigs[(i + k2) % len(vigs)]
+                txt = f'<div class="txt">{paragrafos(tt, capitular=k2 == 0 and (bool(capitulo) or i == 0))}</div>'
+                P.append(('hist', f'<div class="box">{chap if k2 == 0 else ""}{txt}<div class="vig g"><i class="v-{v}"></i></div></div>', '', i))
         else:
             v = vigs[i % len(vigs)]
+            txt = f'<div class="txt">{paragrafos(texto, capitular=bool(capitulo) or i == 0)}</div>'
             P.append(('hist', f'<div class="box">{chap}{txt}<div class="vig"><i class="v-{v}"></i></div></div>', '', i))
     gancho = (h.get('gancho_proximo') or '').strip()
     P.append(('fim', '<div class="in"><div class="f">Fim</div><div class="orn"><i></i><b></b><i></i></div>'
                      f'<p class="para">Esta lenda foi escrita e ilustrada especialmente para {nome}.</p>'
                      + (f'<div class="porta"><div class="k">Uma portinha ficou aberta…</div><p>{esc(gancho)}</p>'
-                        f'<small>A próxima aventura de {nome} pode começar daqui: minhalenda.com.br</small></div>' if gancho else '')
+                        f'<small>No Clube da Lenda, a próxima aventura de {nome} começa daqui · minhalenda.com.br/clube</small></div>' if gancho else '')
                      + '</div>', '', None))
-    # atividades até fechar múltiplo de 4 (com capa e contracapa no livro; só o miolo na gráfica)
-    fixo = len(P) + (0 if grafica else 1)
-    falta = (-fixo) % 4
-    elenco = [e.get('nome') for e in (dna.get('elenco') or []) if e.get('nome')][:10]
+    # atividades fixas: certificado + página dividida (quem apareceu em cima, desenho embaixo); extras só se faltar página
+    elenco = [e.get('nome') for e in (dna.get('elenco') or []) if e.get('nome')][:8]
+    P.append(('atv', f'<div class="cert"><div class="in2"><div class="k">Minha Lenda</div><h2>Certificado de leitor de lendas</h2>'
+                     f'<div class="nm">{nome}</div><p>leu (ou ouviu) a aventura <b>{tit}</b> do começo ao fim.</p>'
+                     '<div class="data">Data e assinatura</div></div></div>', '', None))
+    if elenco:
+        topo = ('<div class="k">Sua vez</div><h3>Quem apareceu nesta aventura? Marque!</h3><ul>' + ''.join(f'<li><b></b>{esc(x)}</li>' for x in elenco) + '</ul>')
+    else:
+        topo = '<div class="k">Sua vez</div><h3>Quem você levaria na próxima aventura?</h3><div class="lin" style="flex:0 0 26mm"><i></i><i></i><i></i></div>'
+    P.append(('atv meia', f'<div class="in"><div class="meia1">{topo}</div><div class="meia2"><h3>Desenhe aqui a sua cena favorita</h3><div class="mold"></div>'
+                          f'<div class="ass">Desenhado por {nome}</div></div></div>', '', None))
     for k in range(falta):
-        a = ATIVIDADES[k % len(ATIVIDADES)]
-        if a == 'certificado':
-            P.append(('atv', f'<div class="cert"><div class="in2"><div class="k">Minha Lenda</div><h2>Certificado de leitor de lendas</h2>'
-                             f'<div class="nm">{nome}</div><p>leu (ou ouviu) a aventura <b>{tit}</b> do começo ao fim.</p>'
-                             '<div class="data">Data e assinatura</div></div></div>', '', None))
-        elif a.startswith('desenho'):
-            t = 'Desenhe aqui a sua cena favorita' if a == 'desenho' else 'Invente o que acontece depois'
-            P.append(('atv', f'<div class="in"><div class="k">Sua vez</div><h2>{t}</h2><div class="mold"></div><div class="ass">Desenhado por {nome}</div></div>', '', None))
-        elif a == 'quem' and elenco:
-            P.append(('atv', '<div class="in"><div class="k">Sua vez</div><h2>Quem apareceu nesta aventura? Marque!</h2><ul>'
-                             + ''.join(f'<li><b></b>{esc(x)}</li>' for x in elenco) + '</ul><div class="lin" style="margin-top:8mm"><i></i><i></i><i></i></div>'
-                             '<div class="ass">E quem você gostaria que aparecesse na próxima?</div></div>', '', None))
+        a = ['desenho2', 'recado', 'recado2'][k % 3]
+        if a == 'desenho2':
+            P.append(('atv', f'<div class="in"><div class="k">Sua vez</div><h2>Invente o que acontece depois</h2><div class="mold"></div><div class="ass">Desenhado por {nome}</div></div>', '', None))
         else:
-            t = 'Escreva um recado para o herói' if a != 'recado2' else 'Conte a aventura para alguém'
+            t = 'Escreva um recado para o herói' if a == 'recado' else 'Conte a aventura para alguém'
             P.append(('atv', f'<div class="in"><div class="k">Sua vez</div><h2>{t}</h2><div class="lin">' + '<i></i>' * 11 + '</div></div>', '', None))
     if not grafica:
-        qr = qr_svg(od, 'https://minhalenda.com.br/?o=livro')
+        qr = qr_svg(od, 'https://minhalenda.com.br/clube?o=livro')
         P.append(('costas', f'<div class="in"><img class="logo" src="{uri(HERE / "logo.svg")}" alt="Minha Lenda"><div class="mid">'
                             '<h2>Toda criança tem histórias.<br><b>Aqui, elas viram lendas.</b></h2>'
                             '<p>Cada livro da Minha Lenda é escrito do zero para uma criança só: com o nome dela, as pessoas que ela ama, o bichinho de casa e os desafios que ela está vivendo. Nenhuma história se repete.</p>'
-                            '<p><b>Ler junto todos os dias</b> amplia o vocabulário, acalma a hora de dormir e aproxima a família. E, quando a história fala sobre ela, ler deixa de ser tarefa e vira vontade.</p></div>'
-                            f'<div class="cta"><img src="{uri(qr)}" alt=""><div><div class="k">Siga e conheça as próximas aventuras</div><p class="h">@minhalenda</p>'
-                            '<div class="u">Instagram · TikTok · YouTube<br>minhalenda.com.br</div></div></div>'
+                            '<p><b>Ler junto todos os dias</b> amplia o vocabulário, acalma a hora de dormir e aproxima a família. E, quando a história fala sobre ela, ler deixa de ser tarefa e vira vontade.</p>'
+                            f'<p>No <b>Clube da Lenda</b>, {nome} recebe uma aventura nova a cada 15 dias, sempre como herói: para ler junto, ouvir narrada e guardar na estante.</p></div>'
+                            f'<div class="cta"><img src="{uri(qr)}" alt=""><div><div class="k">Aponte a câmera e entre para o Clube</div><p class="h">minhalenda.com.br/clube</p>'
+                            '<div class="u">Siga @minhalenda<br>Instagram · TikTok · YouTube</div></div></div>'
                             f'<p class="para">Uma lenda criada especialmente para {nome}.</p></div>', '', None))
     # numeração e lados (página 1 = capa, ímpar = direita)
     out, mapa, n0 = [], {}, 0 if not grafica else 1
@@ -269,11 +303,11 @@ def _paginas(h, ilus, dna, od, cfg, so_ilustra=frozenset(), grafica=False):
         num = k + 1 + n0
         lado = 'odd' if num % 2 else 'even'
         ft = ''
-        if tipo.startswith('hist') or tipo in ('so', 'atv', 'fim'):
+        if tipo.startswith(('hist', 'so', 'atv', 'fim')):
             ft = f'<div class="ft"><span class="t">{tit}</span><span class="r"></span><span class="n">{num}</span></div>'
         attr = f' data-h="{si}"' if si is not None else ''
         out.append(f'<section class="pg {tipo} {lado}"{attr}>{inner}{ft}</section>')
-        if si is not None: mapa[si] = k
+        if si is not None: mapa.setdefault(si, k)
     return out, mapa
 
 
@@ -365,7 +399,11 @@ def montar(h, ilus, dna, od, pid='', pedido=None, log=print):
         im = Image.frombytes('RGB', (pix.width, pix.height), pix.samples)
         nome = f'fl-{i + 1:02d}.jpg'; im.save(od / nome, 'JPEG', quality=82, optimize=True, progressive=True); folhas.append(nome)
     # 3) casa: livreto A4 (90%, marcas de corte e dobra) e uma página por folha A4
-    _livreto(src, str(od / 'imprimir-livreto-a4.pdf'), 297, 210, 0.9,
+    # casa: capa e contracapa sem nada no verso (como na gráfica): entra uma página em branco depois da capa e antes da contracapa
+    casa = pymupdf.open(); casa.insert_pdf(src)
+    while len(casa) % 4:
+        casa.new_page(pno=1 if len(casa) % 2 == 0 else len(casa) - 1, width=PW * MM, height=PH * MM)
+    _livreto(casa, str(od / 'imprimir-livreto-a4.pdf'), 297, 210, 0.9,
              'Minha Lenda · imprima em tamanho real (100%), frente e verso virando na borda curta · corte nas marcas · dobre e grampeie')
     a4 = pymupdf.open(); esc_a4 = min(200 / TW, 287 / TH)
     for i in range(n):
