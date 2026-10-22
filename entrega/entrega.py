@@ -127,12 +127,21 @@ def ilustrar(h, dna, foto, estilo, od, ficha=None):
     for i, il in enumerate((h.get('ilustracoes') or [])[:5]):
         jobs.append((f'il_{i + 1}', {'tipo': 'pagina', 'cena': il.get('cena_en'), 'elenco': quem_de(il.get('quem')), 'pagina': il.get('pagina')}))
     def run(j):
-        nome, extra = j; pagina = extra.pop('pagina', None)
+        nome, extra = j; pagina = extra.pop('pagina', None); conserto = ''
         for tent in range(3):
             try:
-                r = uso_resp(api('/admin/api/imagem', {**extra, 'foto': foto, 'ficha': ficha, 'estilo': estilo, 'figurino': h.get('figurino_heroi_en'), 'mundo': h.get('mundo_visual_en') or '', 'nome': dna['nome']}, tries=1))
+                body = {**extra, 'foto': foto, 'ficha': ficha, 'estilo': estilo, 'figurino': h.get('figurino_heroi_en'), 'mundo': h.get('mundo_visual_en') or '', 'nome': dna['nome'], 'objeto': dna.get('objeto') or ''}
+                if conserto: body['cena'] = f"{body.get('cena') or ''}. FIX these defects of the previous attempt: {conserto}"
+                r = uso_resp(api('/admin/api/imagem', body, tries=1))
                 im = Image.open(io.BytesIO(base64.b64decode(r['img']))).convert('RGB'); im.thumbnail((1600, 1600))
                 im.save(od / f'{nome}.jpg', 'JPEG', quality=87, optimize=True, progressive=True)
+                # conferência visual (22/10): objeto duplicado, criança repetida, gente a mais, mãos, texto. Uma nova tentativa no máximo.
+                if tent < 2:
+                    try:
+                        cf_ = uso_resp(api('/admin/api/conferir_imagem', {'img': jpeg_b64(base64.b64encode((od / f'{nome}.jpg').read_bytes()).decode(), 1024, 82), 'cena': extra.get('cena'), 'nome': dna['nome'], 'objeto': dna.get('objeto') or '', 'extras': len(extra.get('elenco') or [])}, tries=1, timeout=120))
+                        if not cf_.get('ok') and cf_.get('problemas') and not conserto:
+                            conserto = '; '.join(cf_['problemas']); log('conferência pediu nova versão de', nome, privado=True); continue
+                    except Exception as e: log('conferência indisponível', type(e).__name__)
                 return nome, pagina
             except Exception as e:
                 log('imagem falhou', nome, tent, str(e)[:160]); time.sleep(5)
@@ -305,7 +314,7 @@ def ajustar(pid):
             quem = [e for e in ev if any(n and e.get('nome') and (e['nome'] in n or n in e['nome']) for n in (il.get('quem') or []))][:2]
             body = {'tipo': 'pagina', 'cena': f"{il.get('cena_en')}. EDITOR CORRECTION, must follow: {instr}", 'elenco': quem}
             arq = f'il_{k}.jpg'
-        r2 = uso_resp(api('/admin/api/imagem', {**body, 'foto': ficha, 'ficha': ficha, 'estilo': estilo, 'figurino': h.get('figurino_heroi_en'), 'mundo': h.get('mundo_visual_en') or '', 'nome': dna['nome']}))
+        r2 = uso_resp(api('/admin/api/imagem', {**body, 'foto': ficha, 'ficha': ficha, 'estilo': estilo, 'figurino': h.get('figurino_heroi_en'), 'mundo': h.get('mundo_visual_en') or '', 'nome': dna['nome'], 'objeto': dna.get('objeto') or ''}))
         im = Image.open(io.BytesIO(base64.b64decode(r2['img']))).convert('RGB'); im.thumbnail((1600, 1600))
         im.save(od / arq, 'JPEG', quality=87, optimize=True, progressive=True)
     d = livro_mod.montar(h, ilus, dna, od, pid=pid, pedido=p, log=log)
