@@ -12,6 +12,7 @@ import base64, concurrent.futures as cf, hashlib, html, io, json, os, pathlib, r
 from PIL import Image
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import livro as livro_mod
+import marcador as marcador_mod
 
 HERE = pathlib.Path(__file__).parent
 ADM = pathlib.Path(os.environ.get('ML_ADM_DIR', '/mnt/user-data/uploads/Minha Lenda/Adm'))
@@ -142,6 +143,24 @@ def ilustrar(h, dna, foto, estilo, od, ficha=None):
     log('imagens ok:', 1 + len(ilus))
     return ilus
 
+def marcador(h, dna, dados, foto, estilo, od):
+    """Marcador de página do Clube (22/10): tirinha de 3 quadros (1 imagem) + moldura e citação fixas. Nunca derruba o livro."""
+    try:
+        ro = uso_resp(api('/admin/api/tirinha', {'h': {'titulo': h.get('titulo'), 'paginas': h.get('paginas')}, 'nome': dna['nome'], 'idade': dna.get('idade')}))
+        ficha = base64.b64encode((od / 'ficha.jpg').read_bytes()).decode()
+        im = None
+        for tent in range(2):
+            try:
+                r = uso_resp(api('/admin/api/imagem', {'tipo': 'tirinha', 'quadros': ro['quadros'], 'foto': foto, 'ficha': ficha, 'estilo': estilo, 'figurino': h.get('figurino_heroi_en'), 'nome': dna['nome']}, tries=1))
+                im = base64.b64decode(r['img']); break
+            except Exception as e: log('tirinha falhou', tent, str(e)[:160]); time.sleep(5)
+        if not im: return []
+        (od / 'tirinha.png').write_bytes(im)
+        n = int(((dados.get('clube') or {}).get('livro')) or 1)
+        return marcador_mod.montar(od, dna['nome'], n, od / 'tirinha.png', [q['fala'] for q in ro['quadros']], titulo=ro.get('titulo') or '', log=log)
+    except Exception as e:
+        log('marcador falhou', type(e).__name__, str(e)[:200]); return []
+
 # PDF, páginas, impressão e gráfica: ver livro.py (diagramação única, 14/10/2026)
 
 # ---------------- áudio ----------------
@@ -250,6 +269,56 @@ def rediagramar(pid):
     api(f'/admin/api/pedido/{pid}', {'resultado_merge': {'folhas': len(d['folhas']), 'folha_de': d['folha_de'], 'grafica': d['kit'], 'diagramacao': 2}})
     log(pid, 'REDIAGRAMADO', len(d['folhas']), 'páginas')
 
+def ajustar(pid):
+    """Ajuste por reclamação (22/10): o editor escreve o que mudar no admin. 'texto' reescreve a história com a instrução
+    (mantém as ilustrações) e refaz diagramação e narração; 'capa'/'il_N' regera só aquela imagem a partir da ficha do herói."""
+    p = api(f'/admin/api/pedido/{pid}')
+    r = json.loads(p.get('resultado_json') or '{}'); aj = r.get('ajuste') or {}; lv = r.get('livro') or {}
+    alvo, instr = aj.get('alvo'), str(aj.get('instrucao') or '').strip()
+    if not alvo or not instr: raise RuntimeError('pedido sem ajuste pendente')
+    dados = json.loads(p['dados_json']); dna = dados['dna']; estilo = dados.get('estilo') or 'pintura'
+    if dados.get('competencia'): dna['competencia'] = dados['competencia']
+    if dados.get('dedicatoria'): dna['dedicatoria'] = dados['dedicatoria']
+    od = OUT / pid; od.mkdir(parents=True, exist_ok=True)
+    baixar(pid, 'historia.json', od / 'historia.json')
+    h = json.loads((od / 'historia.json').read_text(encoding='utf-8'))
+    ilus = lv.get('ilustracoes') or []
+    for n in ['capa.jpg'] + [x['arquivo'] for x in ilus]: baixar(pid, n, od / n)
+    USO.clear(); extra = {}
+    if alvo == 'texto':
+        plan = {k: v for k, v in h.items() if k not in ('paginas', 'gancho_proximo')}
+        tx = uso_resp(api('/admin/api/texto', {'dna': dna, 'plan': plan, 'rev': {'probs': [f'PEDIDO DO EDITOR, obrigatório (reclamação da família): {instr}. Mude só o necessário para atender o pedido; mantenha o resto da história, o tamanho e a divisão em páginas.'], 'anterior': h['paginas']}}))
+        if 'txt' not in tx: raise RuntimeError('motor/texto: ' + str(tx.get('erro') or tx)[:300])
+        h['paginas'] = tx['txt'].get('paginas') or h['paginas']
+        h['gancho_proximo'] = tx['txt'].get('gancho_proximo') or h.get('gancho_proximo')
+        if dna.get('dedicatoria'): h['dedicatoria'] = dna['dedicatoria']
+        (od / 'historia.json').write_text(json.dumps(h, ensure_ascii=False, indent=1), encoding='utf-8')
+    else:
+        baixar(pid, 'ficha.jpg', od / 'ficha.jpg')
+        ficha = jpeg_b64(base64.b64encode((od / 'ficha.jpg').read_bytes()).decode())
+        ev = h.get('elenco_visual') or []
+        if alvo == 'capa':
+            body = {'tipo': 'capa', 'cena': f"{h.get('capa_cena_en')}. EDITOR CORRECTION, must follow: {instr}", 'elenco': [e for e in ev if not e.get('real')][:1]}
+            arq = 'capa.jpg'
+        else:
+            k = int(alvo.split('_')[1]); il = (h.get('ilustracoes') or [])[k - 1]
+            quem = [e for e in ev if any(n and e.get('nome') and (e['nome'] in n or n in e['nome']) for n in (il.get('quem') or []))][:2]
+            body = {'tipo': 'pagina', 'cena': f"{il.get('cena_en')}. EDITOR CORRECTION, must follow: {instr}", 'elenco': quem}
+            arq = f'il_{k}.jpg'
+        r2 = uso_resp(api('/admin/api/imagem', {**body, 'foto': ficha, 'ficha': ficha, 'estilo': estilo, 'figurino': h.get('figurino_heroi_en'), 'mundo': h.get('mundo_visual_en') or '', 'nome': dna['nome']}))
+        im = Image.open(io.BytesIO(base64.b64decode(r2['img']))).convert('RGB'); im.thumbnail((1600, 1600))
+        im.save(od / arq, 'JPEG', quality=87, optimize=True, progressive=True)
+    d = livro_mod.montar(h, ilus, dna, od, pid=pid, pedido=p, log=log)
+    nomes = ['capa.jpg', 'livro.pdf', 'imprimir-livreto-a4.pdf', 'imprimir-a4.pdf', 'historia.json'] + [x['arquivo'] for x in ilus] + d['folhas'] + d['kit']
+    if alvo == 'texto':
+        marcas, marcas_extra = narrar(h, dna, od); nomes.append('audiolivro.mp3')
+        extra = {'marcas': marcas, 'marcas_extra': marcas_extra,
+                 'livro': {**lv, 'gancho_proximo': h.get('gancho_proximo'), 'paginas': [{'n': x.get('n'), 'capitulo': x.get('capitulo'), 'texto': x.get('texto')} for x in h['paginas']]}}
+    subir(pid, od, nomes)
+    aj['feito_em'] = time.strftime('%Y-%m-%dT%H:%M:%S'); hist = (r.get('ajustes') or []) + [aj]
+    api(f'/admin/api/pedido/{pid}', {'resultado_merge': {**extra, 'folhas': len(d['folhas']), 'folha_de': d['folha_de'], 'grafica': d['kit'] or r.get('grafica') or [], 'ajuste': None, 'ajustes': hist, 'v': int(time.time())}})
+    log(pid, 'AJUSTADO', alvo)
+
 def produzir(pid, refazer=False):
     p = api(f'/admin/api/pedido/{pid}')
     if p['status'] in ('entregue',) and not refazer: log(pid, 'já entregue'); return
@@ -272,11 +341,13 @@ def produzir(pid, refazer=False):
         d = livro_mod.montar(h, ilus, dna, od, pid=pid, pedido=p, log=log)
         folhas, mapa, kit = d['folhas'], d['folha_de'], d['kit']
         marcas, marcas_extra = narrar(h, dna, od)
-        nomes = ['capa.jpg', 'ficha.jpg', 'livro.pdf', 'audiolivro.mp3', 'imprimir-livreto-a4.pdf', 'imprimir-a4.pdf', 'historia.json'] + [x['arquivo'] for x in ilus] + folhas + kit
+        marc = marcador(h, dna, dados, foto, estilo, od) if (p.get('assinatura_id') or dados.get('clube')) else []
+        if marc and p.get('produto') == 'impresso': kit = kit + ['marcador.pdf']
+        nomes = ['capa.jpg', 'ficha.jpg', 'livro.pdf', 'audiolivro.mp3', 'imprimir-livreto-a4.pdf', 'imprimir-a4.pdf', 'historia.json'] + [x['arquivo'] for x in ilus] + folhas + kit + [m for m in marc if m not in kit]
         subir(pid, od, nomes)
         livro = {'titulo': h.get('titulo'), 'dedicatoria': h.get('dedicatoria'), 'gancho_proximo': h.get('gancho_proximo'),
                  'paginas': [{'n': x.get('n'), 'capitulo': x.get('capitulo'), 'texto': x.get('texto')} for x in h['paginas']], 'ilustracoes': ilus}
-        api(f'/admin/api/pedido/{pid}', {'status': 'entregue', 'resultado': {'capa': 'capa.jpg', 'livro': livro, 'marcas': marcas, 'nota': crit.get('media'), 'folhas': len(folhas), 'folha_de': mapa, 'imprimir': True, 'grafica': kit, 'diagramacao': 2, 'marcas_extra': marcas_extra, 'uso': USO}})
+        api(f'/admin/api/pedido/{pid}', {'status': 'entregue', 'resultado': {'capa': 'capa.jpg', 'livro': livro, 'marcas': marcas, 'nota': crit.get('media'), 'folhas': len(folhas), 'folha_de': mapa, 'imprimir': True, 'grafica': kit, 'diagramacao': 2, 'marcas_extra': marcas_extra, 'uso': USO, **({'marcador': 'marcador.pdf', 'marcador_img': 'marcador.jpg'} if marc else {})}})
         log(pid, 'ENTREGUE', f'{SITE}/l/{p["token"]}', privado=True)
     except Exception as e:
         api(f'/admin/api/pedido/{pid}', {'status': 'falhou', 'erro': str(e)[:700]}); raise
@@ -292,6 +363,7 @@ if __name__ == '__main__':
     for pid in ids:
         try:
             if modo == 'rediagramar': rediagramar(pid)
+            elif modo == 'ajustar': ajustar(pid)
             else: produzir(pid, refazer=(modo == 'refazer'))
         except Exception as e:
             # tipo do erro no log público; a mensagem completa vai para o painel e para o e-mail de aviso
