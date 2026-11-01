@@ -196,9 +196,20 @@ FIT_JS = """() => {
 }"""
 
 
+def _prots(dna):
+    """co-protagonistas (01/11): lista de nomes na ordem da família; senão só o herói"""
+    ps = [p['nome'] if isinstance(p, dict) else str(p) for p in (dna.get('protagonistas') or []) if p]
+    return ps if len(ps) > 1 else [dna['nome']]
+
+def nomes_todos(dna):
+    ps = _prots(dna)
+    return ps[0] if len(ps) == 1 else ', '.join(ps[:-1]) + ' e ' + ps[-1]
+
+
 def _paginas(h, ilus, dna, od, cfg, so_ilustra=frozenset(), grafica=False):
     """Monta a lista de páginas (HTML). Retorna (html_paginas, mapa_historia->índice da página)."""
-    nome = esc(dna['nome']); tit = esc(h.get('titulo', ''))
+    nome = esc(nomes_todos(dna)); tit = esc(h.get('titulo', ''))
+    plural = len(_prots(dna)) > 1
     fase = str(dna.get('fase', '1'))
     col = COL.get(fase, COL['1'])
     at = {int(x['pagina']): x['arquivo'] for x in ilus}
@@ -272,7 +283,7 @@ def _paginas(h, ilus, dna, od, cfg, so_ilustra=frozenset(), grafica=False):
     # atividades fixas: certificado + página dividida (quem apareceu em cima, desenho embaixo); extras só se faltar página
     elenco = [e.get('nome') for e in (dna.get('elenco') or []) if e.get('nome')][:8]
     P.append(('atv', f'<div class="cert"><div class="in2"><div class="k">Minha Lenda</div><h2>Certificado de leitor de lendas</h2>'
-                     f'<div class="nm">{nome}</div><p>leu (ou ouviu) a aventura <b>{tit}</b> do começo ao fim.</p>'
+                     f'<div class="nm"{" style=\"font-size:.62em\"" if plural else ""}>{nome}</div><p>{"leram (ou ouviram)" if plural else "leu (ou ouviu)"} a aventura <b>{tit}</b> do começo ao fim.</p>'
                      '<div class="data">Data e assinatura</div></div></div>', '', None))
     if elenco:
         topo = ('<div class="k">Sua vez</div><h3>Quem apareceu nesta aventura? Marque!</h3><ul>' + ''.join(f'<li><b></b>{esc(x)}</li>' for x in elenco) + '</ul>')
@@ -293,8 +304,8 @@ def _paginas(h, ilus, dna, od, cfg, so_ilustra=frozenset(), grafica=False):
                             '<h2>Toda criança tem histórias.<br><b>Aqui, elas viram lendas.</b></h2>'
                             '<p>Cada livro da Minha Lenda é escrito do zero para uma criança só: com o nome dela, as pessoas que ela ama, o bichinho de casa e os desafios que ela está vivendo. Nenhuma história se repete.</p>'
                             '<p><b>Ler junto todos os dias</b> amplia o vocabulário, acalma a hora de dormir e aproxima a família. E, quando a história fala sobre ela, ler deixa de ser tarefa e vira vontade.</p>'
-                            f'<p>No <b>Clube da Lenda</b>, {nome} recebe uma aventura nova a cada 15 dias, sempre como herói: para ler junto, ouvir narrada e guardar na estante.</p></div>'
-                            f'<div class="cta"><img src="{uri(qr)}" alt=""><div><div class="k">Aponte a câmera e entre para o Clube</div><p class="h">minhalenda.com.br/clube</p>'
+                            + (f'<p>No <b>Clube da Lenda</b>, {nome} recebem uma aventura nova a cada 15 dias, sempre como heróis: para ler junto, ouvir narrada e guardar na estante.</p></div>' if plural else f'<p>No <b>Clube da Lenda</b>, {nome} recebe uma aventura nova a cada 15 dias, sempre como herói: para ler junto, ouvir narrada e guardar na estante.</p></div>')
+                            + f'<div class="cta"><img src="{uri(qr)}" alt=""><div><div class="k">Aponte a câmera e entre para o Clube</div><p class="h">minhalenda.com.br/clube</p>'
                             '<div class="u">Siga @minhalenda<br>Instagram · TikTok · YouTube</div></div></div>'
                             f'<p class="para">Uma lenda criada especialmente para {nome}.</p></div>', '', None))
     # numeração e lados (página 1 = capa, ímpar = direita)
@@ -389,7 +400,7 @@ def montar(h, ilus, dna, od, pid='', pedido=None, log=print):
     liv = pymupdf.open()
     for i in range(n):
         p = liv.new_page(width=TW * MM, height=TH * MM); p.show_pdf_page(p.rect, src, i, clip=trim)
-    liv.set_metadata({'title': h.get('titulo', ''), 'author': 'Minha Lenda', 'subject': f'Uma lenda criada especialmente para {dna["nome"]}', 'creator': 'Minha Lenda'})
+    liv.set_metadata({'title': h.get('titulo', ''), 'author': 'Minha Lenda', 'subject': f'Uma lenda criada especialmente para {nomes_todos(dna)}', 'creator': 'Minha Lenda'})
     liv.save(od / 'livro.pdf', garbage=3, deflate=True)
     # 2) páginas em imagem para o livro folheável e a leitura contínua
     from PIL import Image

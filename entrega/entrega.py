@@ -115,13 +115,23 @@ def jpeg_b64(b64, maxw=768, q=86):
     im = Image.open(io.BytesIO(base64.b64decode(b64))).convert('RGB'); im.thumbnail((maxw, maxw))
     o = io.BytesIO(); im.save(o, 'JPEG', quality=q); return base64.b64encode(o.getvalue()).decode()
 
-def ilustrar(h, dna, foto, estilo, od, ficha=None):
+def ilustrar(h, dna, foto, estilo, od, ficha=None, coprot=None):
     # ficha do herói: gerada da foto no livro 1; no Clube, os livros seguintes reaproveitam a do livro 1 (a foto já foi apagada)
     if not ficha:
         f = uso_resp(api('/admin/api/imagem', {'tipo': 'ficha', 'foto': foto, 'estilo': estilo, 'figurino': h.get('figurino_heroi_en'), 'nome': dna['nome']}))
         ficha = jpeg_b64(f['img'])
     (od / 'ficha.jpg').write_bytes(base64.b64decode(ficha))
-    ev = h.get('elenco_visual') or []
+    # co-protagonistas (01/11): cada irmão ganha a própria ficha (da foto dele) e aparece de rosto em todas as cenas
+    herois = []
+    for k, c in enumerate(coprot or []):
+        fc = c.get('ficha')
+        if not fc:
+            r = uso_resp(api('/admin/api/imagem', {'tipo': 'ficha', 'foto': c['foto'], 'estilo': estilo, 'figurino': c.get('figurino') or h.get('figurino_heroi_en'), 'nome': c['nome']}))
+            fc = jpeg_b64(r['img'])
+        (od / f'ficha_{k + 2}.jpg').write_bytes(base64.b64decode(fc))
+        herois.append({'nome': c['nome'], 'ficha': fc})
+    nomes_her = [x['nome'].lower() for x in herois]
+    ev = [e for e in (h.get('elenco_visual') or []) if str(e.get('nome', '')).lower() not in nomes_her]
     def quem_de(nomes): return [e for e in ev if any(n and e.get('nome') and (e['nome'] in n or n in e['nome']) for n in (nomes or []))][:2]
     jobs = [('capa', {'tipo': 'capa', 'cena': h.get('capa_cena_en'), 'elenco': [e for e in ev if not e.get('real')][:1]})]
     for i, il in enumerate((h.get('ilustracoes') or [])[:5]):
@@ -130,7 +140,7 @@ def ilustrar(h, dna, foto, estilo, od, ficha=None):
         nome, extra = j; pagina = extra.pop('pagina', None); conserto = ''
         for tent in range(3):
             try:
-                body = {**extra, 'foto': foto, 'ficha': ficha, 'estilo': estilo, 'figurino': h.get('figurino_heroi_en'), 'mundo': h.get('mundo_visual_en') or '', 'nome': dna['nome'], 'objeto': dna.get('objeto') or ''}
+                body = {**extra, 'foto': foto, 'ficha': ficha, 'estilo': estilo, 'figurino': h.get('figurino_heroi_en'), 'mundo': h.get('mundo_visual_en') or '', 'nome': dna['nome'], 'objeto': dna.get('objeto') or '', 'herois': herois}
                 if conserto: body['cena'] = f"{body.get('cena') or ''}. FIX these defects of the previous attempt: {conserto}"
                 r = uso_resp(api('/admin/api/imagem', body, tries=1))
                 im = Image.open(io.BytesIO(base64.b64decode(r['img']))).convert('RGB'); im.thumbnail((1600, 1600))
@@ -138,7 +148,7 @@ def ilustrar(h, dna, foto, estilo, od, ficha=None):
                 # conferência visual (22/10): objeto duplicado, criança repetida, gente a mais, mãos, texto. Uma nova tentativa no máximo.
                 if tent < 2:
                     try:
-                        cf_ = uso_resp(api('/admin/api/conferir_imagem', {'img': jpeg_b64(base64.b64encode((od / f'{nome}.jpg').read_bytes()).decode(), 1024, 82), 'cena': extra.get('cena'), 'nome': dna['nome'], 'objeto': dna.get('objeto') or '', 'extras': len(extra.get('elenco') or [])}, tries=1, timeout=120))
+                        cf_ = uso_resp(api('/admin/api/conferir_imagem', {'img': jpeg_b64(base64.b64encode((od / f'{nome}.jpg').read_bytes()).decode(), 1024, 82), 'cena': extra.get('cena'), 'nome': ', '.join([dna['nome']] + [x['nome'] for x in herois]), 'herois_n': len(herois), 'objeto': dna.get('objeto') or '', 'extras': len(extra.get('elenco') or [])}, tries=1, timeout=120))
                         if not cf_.get('ok') and cf_.get('problemas') and not conserto:
                             conserto = '; '.join(cf_['problemas']); log('conferência pediu nova versão de', nome, privado=True); continue
                     except Exception as e: log('conferência indisponível', type(e).__name__)
@@ -199,7 +209,7 @@ def dur(f): return float(subprocess.run(['ffprobe', '-v', 'error', '-show_entrie
 
 def narrar(h, dna, od):
     voice, tempo = VOZ[str(dna.get('fase', '1'))]
-    nome = dna['nome']
+    nome = livro_mod.nomes_todos(dna)
     abre = f"Minha Lenda apresenta: {h.get('titulo','')}. Uma história criada especialmente para {nome}."
     fecha = (f"Esta lenda foi criada especialmente para {nome}. E a aventura continua: a próxima história já está esperando. "
              "Para criar outra, é só visitar minha lenda ponto com ponto bê érre. Até a próxima lenda!")
@@ -344,15 +354,17 @@ def produzir(pid, refazer=False):
         if not foto: raise RuntimeError('pedido sem foto')
         log(pid, dna['nome'], 'idade', dna.get('idade'), 'história', dna.get('familia'), dna.get('historia'), privado=True)
         USO.clear()
+        coprot = dados.get('coprotagonistas') or []
+        if coprot: dna['protagonistas'] = dados.get('ordem_nomes') or ([dna['nome']] + [c['nome'] for c in coprot])
         h, crit = escrever(dna)
         (od / 'historia.json').write_text(json.dumps(h, ensure_ascii=False, indent=1), encoding='utf-8')
-        ilus = ilustrar(h, dna, foto, estilo, od, ficha)
+        ilus = ilustrar(h, dna, foto, estilo, od, ficha, coprot)
         d = livro_mod.montar(h, ilus, dna, od, pid=pid, pedido=p, log=log)
         folhas, mapa, kit = d['folhas'], d['folha_de'], d['kit']
         marcas, marcas_extra = narrar(h, dna, od)
         marc = marcador(h, dna, dados, foto, estilo, od) if (p.get('assinatura_id') or dados.get('clube')) else []
         if marc and p.get('produto') == 'impresso': kit = kit + ['marcador.pdf']
-        nomes = ['capa.jpg', 'ficha.jpg', 'livro.pdf', 'audiolivro.mp3', 'imprimir-livreto-a4.pdf', 'imprimir-a4.pdf', 'historia.json'] + [x['arquivo'] for x in ilus] + folhas + kit + [m for m in marc if m not in kit]
+        nomes = [f'ficha_{k + 2}.jpg' for k in range(len(coprot))] + ['capa.jpg', 'ficha.jpg', 'livro.pdf', 'audiolivro.mp3', 'imprimir-livreto-a4.pdf', 'imprimir-a4.pdf', 'historia.json'] + [x['arquivo'] for x in ilus] + folhas + kit + [m for m in marc if m not in kit]
         subir(pid, od, nomes)
         livro = {'titulo': h.get('titulo'), 'dedicatoria': h.get('dedicatoria'), 'gancho_proximo': h.get('gancho_proximo'),
                  'paginas': [{'n': x.get('n'), 'capitulo': x.get('capitulo'), 'texto': x.get('texto')} for x in h['paginas']], 'ilustracoes': ilus}
