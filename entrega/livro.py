@@ -298,7 +298,19 @@ def _paginas(h, ilus, dna, od, cfg, so_ilustra=frozenset(), grafica=False):
         else:
             t = 'Escreva um recado para o herói' if a == 'recado' else 'Conte a aventura para alguém'
             P.append(('atv', f'<div class="in"><div class="k">Sua vez</div><h2>{t}</h2><div class="lin">' + '<i></i>' * 11 + '</div></div>', '', None))
-    if not grafica:
+    promo = dna.get('promo') or {}
+    if not grafica and promo:
+        # contracapa de lembrança de festa (01/11): cupom com prazo + convite para a festa do convidado
+        qr = qr_svg(od, promo['url'])
+        P.append(('costas', f'<div class="in"><img class="logo" src="{uri(HERE / "logo.svg")}" alt="Minha Lenda"><div class="mid">'
+                            '<h2>Toda criança tem histórias.<br><b>Aqui, elas viram lendas.</b></h2>'
+                            f'<p>Esta lenda foi feita para {nome} e virou lembrança da festa. Agora é a vez do seu filho: com o nome dele, as pessoas que ele ama, o bichinho de casa e o rosto dele nas ilustrações.</p>'
+                            f'<p><b>Presente para quem veio à festa:</b> {esc(str(promo["pct"]))}% de desconto com o cupom <b>{esc(promo["cupom"])}</b>, até {esc(promo["ate"])}.</p>'
+                            '<p><b>Quer uma assim na festa do seu filho?</b> Lembrança de aniversário com a criança como herói: minhalenda.com.br/aniversario</p></div>'
+                            f'<div class="cta"><img src="{uri(qr)}" alt=""><div><div class="k">Aponte a câmera: o desconto já entra</div><p class="h">Cupom {esc(promo["cupom"])}</p>'
+                            '<div class="u">minhalenda.com.br · @minhalenda<br>Instagram · TikTok · YouTube</div></div></div>'
+                            f'<p class="para">Uma lenda criada especialmente para {nome}.</p></div>', '', None))
+    elif not grafica:
         qr = qr_svg(od, 'https://minhalenda.com.br/clube?o=livro')
         P.append(('costas', f'<div class="in"><img class="logo" src="{uri(HERE / "logo.svg")}" alt="Minha Lenda"><div class="mid">'
                             '<h2>Toda criança tem histórias.<br><b>Aqui, elas viram lendas.</b></h2>'

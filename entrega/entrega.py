@@ -221,8 +221,13 @@ def narrar(h, dna, od):
     g = str(h.get('gancho_proximo') or '').strip()
     if g and '?' not in g[-3:]: g += ' O que será que vem por aí?'
     teaser = f"Ei… ainda está aí? Então escute só, bem baixinho: {g}" if g else ''
+    # pronúncia (01/11): grafia só para a voz, ex. {"Matteo": "Matéo"}; o texto do livro não muda
+    pron = dna.get('pronuncia') or {}
+    def fala(t):
+        for a, b in pron.items(): t = re.sub(r'\b' + re.escape(a) + r'\b', b, t)
+        return t
     with cf.ThreadPoolExecutor(4) as ex:
-        wavs = list(ex.map(lambda t: tts(t, voice), [abre] + partes + [fecha] + ([teaser] if teaser else [])))
+        wavs = list(ex.map(lambda t: tts(fala(t), voice), [abre] + partes + [fecha] + ([teaser] if teaser else [])))
     wt = wavs.pop() if teaser else None
     tmp = pathlib.Path(tempfile.mkdtemp(dir=od))
     std = ['-ar', '44100', '-ac', '2']
@@ -346,6 +351,7 @@ def produzir(pid, refazer=False):
         dados = json.loads(p['dados_json']); dna = dados['dna']; estilo = dados.get('estilo') or 'pintura'
         if dados.get('competencia'): dna['competencia'] = dados['competencia']
         if dados.get('dedicatoria'): dna['dedicatoria'] = dados['dedicatoria']
+        if dados.get('pronuncia'): dna['pronuncia'] = dados['pronuncia']
         od = OUT / pid; od.mkdir(parents=True, exist_ok=True)
         foto, ficha = p.get('foto_b64'), None
         if not foto and dados.get('ficha_de'):
