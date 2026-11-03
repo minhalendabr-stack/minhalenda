@@ -86,7 +86,8 @@ html,body{margin:0;background:#fff;color:#1C1236;font-family:'Alegreya Sans',san
 .q img{width:100%%;height:33mm;object-fit:cover;border:.35mm solid #1C1236;border-radius:1.6mm;display:block}
 .q p{margin:.9mm 0 0;font:500 7.3pt/1.18 'Alegreya Sans';color:#1C1236;min-height:5.4mm}
 .q p b{font-weight:800}
-.tt{font:italic 700 7.6pt Alegreya;color:#A8710F;text-align:center;margin:0}
+.tt{font:800 10.5pt/1.1 Alegreya;color:#1C1236;text-align:center;margin:0 0 .6mm}.tt .cp{font:12.5pt Gotica;color:#A8710F}.tt .cp2{font:800 12.5pt Alegreya;color:#A8710F}
+.q{position:relative}.q .fim{position:absolute;right:1.2mm;top:27.6mm;background:#FFFCF5;border:.35mm solid #1C1236;border-radius:1mm;padding:.2mm 1.4mm;font:italic 800 7pt Alegreya;color:#1C1236}
 .ad{margin-top:auto;width:100%%;border-top:.3mm dashed #DDA53C;padding-top:2mm;display:flex;gap:2mm;align-items:center}
 .ad img{width:12.5mm;height:12.5mm;flex:none}
 .ad p{margin:0;font:500 6.6pt/1.22 'Alegreya Sans';color:#5A5070}
@@ -128,15 +129,15 @@ def montar(od, nome, livro_n, tirinha_img, falas, titulo='', qr_url='https://min
         if ':' in t[:24]:
             a, b = t.split(':', 1); return f'<b>{esc(a.strip())}:</b> {esc(b.strip())}'
         return esc(t)
-    quadros = ''.join(f'<div class="q"><img src="{uri(q)}" alt=""><p>{fala(f)}</p></div>' for q, f in zip(qs, falas))
+    quadros = ''.join(f'<div class="q"><img src="{uri(q)}" alt="">{"<span class=fim>Fim</span>" if k == len(qs) - 1 else ""}<p>{fala(f)}</p></div>' for k, (q, f) in enumerate(zip(qs, falas)))
     frente = (f'<div class="face frente"><img class="logo" src="{uri(logo)}" alt="Minha Lenda">'
               f'<p class="de">O marcador de<b>{esc(nome)}</b></p>'
-              f'<div class="tira">{f"<p class=tt>{esc(titulo)}</p>" if titulo else ""}{quadros}</div>'
+              f'<div class="tira">{f"<p class=tt><span class={'cp' if titulo[:1].upper() in 'BCDEGLMNPQRSU' else 'cp2'}>{esc(titulo[:1])}</span>{esc(titulo[1:])}</p>" if titulo else ""}{quadros}</div>'
               f'<div class="ad"><img src="{uri(qr)}" alt=""><p><b>Toda criança tem histórias.</b>Aqui, elas viram lendas. minhalenda.com.br · @minhalenda</p></div></div>')
     verso = (f'<div class="face verso"><div class="moldura"></div>'
              f'<div class="orn t" style="--m:{_sil(o1)}"></div><div class="orn b" style="--m:{_sil(o2)}"></div>'
              f'<div class="cit"><span class="aspa" aria-hidden="true">&ldquo;</span><q>{esc(cit)}</q><span class="au">{esc(autor)}</span>{f"<span class=fo>{esc(fonte)}</span>" if fonte else ""}</div>'
-             f'<div class="vm">Clube da Lenda · aventura {int(livro_n or 1)}</div></div>')
+             + (f'<div class="vm">Clube da Lenda · aventura {int(livro_n)}</div></div>' if livro_n else '<div class="vm">Um presente da Minha Lenda</div></div>'))
     # marcas de corte (fora do marcador) nos 4 cantos e de dobra no meio
     L, G = 6, 1.5; x0, y0, x1, y1, xm = 55, 22, 155, 212, 105
     cm = []
@@ -148,7 +149,7 @@ def montar(od, nome, livro_n, tirinha_img, falas, titulo='', qr_url='https://min
             '<li>Imprima em tamanho real (100%), de preferência em papel mais grosso.</li>'
             '<li>Recorte nas marcas dos cantos, em volta do marcador.</li>'
             '<li>Dobre ao meio na linha tracejada e cole as duas metades com cola bastão.</li></ol>'
-            '<p class="pe">Um marcador novo chega com cada aventura do Clube da Lenda. Guarde todos: a coleção conta a história dela.</p></div>')
+            + ('<p class="pe">Um marcador novo chega com cada aventura do Clube da Lenda. Guarde todos: a coleção conta a história dela.</p></div>' if livro_n else '<p class="pe">Um presente para guardar o lugar da leitura.</p></div>'))
     doc = (f'<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><style>{CSS % {"f": uri(FONTS)}}</style></head><body>'
            f'<div class="folha"><div class="m">{frente}{verso}</div><div class="dobra"></div>{"".join(cm)}{inst}</div></body></html>')
     hp = od / 'marcador.html'; hp.write_text(doc, encoding='utf-8')
