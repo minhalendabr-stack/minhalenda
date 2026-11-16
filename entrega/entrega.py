@@ -317,6 +317,12 @@ def ajustar(pid):
         h['gancho_proximo'] = tx['txt'].get('gancho_proximo') or h.get('gancho_proximo')
         if dna.get('dedicatoria'): h['dedicatoria'] = dna['dedicatoria']
         (od / 'historia.json').write_text(json.dumps(h, ensure_ascii=False, indent=1), encoding='utf-8')
+    elif alvo == 'ilustracoes':
+        # 08/11: refaz ficha, capa e todas as ilustrações a partir da FOTO (semelhança baixa), mantendo texto e narração
+        foto = p.get('foto_b64')
+        if not foto: raise RuntimeError('a foto já foi apagada: peça uma foto nova ao cliente')
+        if instr and instr != '-': h['figurino_heroi_en'] = (h.get('figurino_heroi_en') or '') + f'. EDITOR NOTE on the hero look, must follow: {instr}'
+        ilus = ilustrar(h, dna, foto, estilo, od, None, dados.get('coprotagonistas') or [])
     else:
         baixar(pid, 'ficha.jpg', od / 'ficha.jpg')
         ficha = jpeg_b64(base64.b64encode((od / 'ficha.jpg').read_bytes()).decode())
@@ -334,6 +340,7 @@ def ajustar(pid):
         im.save(od / arq, 'JPEG', quality=87, optimize=True, progressive=True)
     d = livro_mod.montar(h, ilus, dna, od, pid=pid, pedido=p, log=log)
     nomes = ['capa.jpg', 'livro.pdf', 'imprimir-livreto-a4.pdf', 'imprimir-a4.pdf', 'historia.json'] + [x['arquivo'] for x in ilus] + d['folhas'] + d['kit']
+    if alvo == 'ilustracoes': nomes.append('ficha.jpg')
     if alvo == 'texto':
         marcas, marcas_extra = narrar(h, dna, od); nomes.append('audiolivro.mp3')
         extra = {'marcas': marcas, 'marcas_extra': marcas_extra,
