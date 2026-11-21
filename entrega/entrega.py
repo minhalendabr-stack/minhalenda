@@ -88,7 +88,21 @@ def log(*a, privado=False):
     print(time.strftime('%H:%M:%S'), *a, flush=True)
 
 # ---------------- história ----------------
-def escrever(dna):
+# ML-QUAL-01 Lote A (20/11): guarda todas as versões com a crítica e entrega a melhor (A3); falha de estrutura ou de papel
+# refaz o PLANO, não só o texto (A5); se a melhor ainda tiver gate falso ou média < 7,5, o livro não sai (A4: status revisar).
+GATES_ESTRUTURA = ('gate_papel_ok', 'gate_protagonismo_ok', 'gate_final_ok')
+NOTA_MIN = 7.5
+def _gates_falsos(c): return [k for k, v in (c or {}).items() if k.startswith('gate_') and v is False]
+def _media(c): return float((c or {}).get('media') or 0)
+def _melhor(versoes):
+    sem_gate = [v for v in versoes if not _gates_falsos(v['crit'])]
+    if sem_gate: return max(sem_gate, key=lambda v: (v['aprovada'], _media(v['crit'])))
+    return min(versoes, key=lambda v: (len(_gates_falsos(v['crit'])), -_media(v['crit'])))
+def _estrutural(c):
+    return any((c or {}).get(g) is False for g in GATES_ESTRUTURA) or float(((c or {}).get('notas') or {}).get('estrutura', 10) or 10) < 7
+def _travado(v): return not v['aprovada'] and (bool(_gates_falsos(v['crit'])) or _media(v['crit']) < NOTA_MIN)
+
+def _rodada(dna, versoes, max_rev):
     pl = uso_resp(api('/admin/api/plano', dna))
     if 'plan' not in pl: raise RuntimeError('motor/plano: ' + str(pl.get('erro') or pl)[:300])
     plan = pl['plan']
@@ -96,19 +110,40 @@ def escrever(dna):
     if 'txt' not in tx: raise RuntimeError('motor/texto: ' + str(tx.get('erro') or tx)[:300])
     montar = lambda: {**plan, 'paginas': tx['txt'].get('paginas') or [], 'gancho_proximo': tx['txt'].get('gancho_proximo') or ''}
     cr = uso_resp(api('/admin/api/critica', {'dna': dna, 'h': montar()})); rev = 0
+    versoes.append({'h': montar(), 'crit': cr.get('crit') or {}, 'aprovada': bool(cr.get('aprovada')), 'probs': cr.get('probs') or [], 'plano': len([v for v in versoes if v.get('rev') == 0]) + 1, 'rev': 0})
     longo = lambda: any('Texto longo' in str(x) for x in (cr.get('probs') or []))
     # tamanho travado por faixa (09/10): texto longo ganha uma revisão a mais só para cortar
-    while not cr.get('aprovada') and rev < (2 if dna.get('enredo_livre') or longo() else 1):
+    while not cr.get('aprovada') and rev < (max_rev + 1 if longo() else max_rev):
         tx = uso_resp(api('/admin/api/texto', {'dna': dna, 'plan': plan, 'rev': {'probs': cr.get('probs'), 'anterior': tx['txt'].get('paginas')}}))
         cr = uso_resp(api('/admin/api/critica', {'dna': dna, 'h': montar()})); rev += 1
-    h = montar()
+        versoes.append({'h': montar(), 'crit': cr.get('crit') or {}, 'aprovada': bool(cr.get('aprovada')), 'probs': cr.get('probs') or [], 'plano': versoes[-1]['plano'], 'rev': rev})
+    return versoes[-1]
+
+def escrever(dna):
+    versoes = []
+    ult = _rodada(dna, versoes, 2 if dna.get('enredo_livre') else 1)
+    best = _melhor(versoes)
+    # A5/A4: falha de estrutura ou trava → 1 tentativa com PLANO novo, passando os problemas como pedido do editor
+    if not best['aprovada'] and (_estrutural(best['crit']) or _travado(best)):
+        probs = '; '.join(str(x) for x in (best['probs'] or [])[:8])[:1100]
+        dna2 = {**dna, 'ajuste_editor': ((dna.get('ajuste_editor') + ' | ') if dna.get('ajuste_editor') else '') + 'O roteiro anterior foi reprovado por estrutura. Refaça o plano corrigindo: ' + probs}
+        log('replanejando:', 'gates', _gates_falsos(best['crit']), '| média', _media(best['crit']), privado=True)
+        _rodada(dna2, versoes, 1)
+        best = _melhor(versoes)
+    h = best['h']
     reais = [e['nome'].lower() for e in dna.get('elenco') or []]
     for e in h.get('elenco_visual') or []:
         if any(n.split(' ')[-1] in str(e.get('nome', '')).lower() for n in reais): e['real'] = True
     if dna.get('dedicatoria'): h['dedicatoria'] = dna['dedicatoria']
-    media = (cr.get('crit') or {}).get('media')
-    log('texto ok:', h.get('titulo'), '| páginas', len(h['paginas']), '| revisões', rev, '| nota', media, privado=True)
-    return h, cr.get('crit') or {}
+    notas = [f"p{v['plano']}r{v['rev']}={_media(v['crit'])}{'*' if v['aprovada'] else ''}{'!' + ','.join(_gates_falsos(v['crit'])) if _gates_falsos(v['crit']) else ''}" for v in versoes]
+    escolhida = f"p{best['plano']}r{best['rev']}"
+    log('texto ok:', h.get('titulo'), '| páginas', len(h['paginas']), '| versões', ' '.join(notas), '| saiu', escolhida, privado=True)
+    crit = {**(best['crit'] or {}), 'versoes': notas, 'escolhida': escolhida}
+    trava = None
+    if _travado(best):
+        trava = {'media': _media(best['crit']), 'gates': {k: v for k, v in (best['crit'] or {}).items() if k.startswith('gate_')},
+                 'problemas': [str(x)[:240] for x in (best['probs'] or [])[:10]], 'versoes': len(versoes), 'notas': notas, 'escolhida': escolhida}
+    return h, crit, trava
 
 # ---------------- imagens ----------------
 def jpeg_b64(b64, maxw=768, q=86):
@@ -369,7 +404,21 @@ def produzir(pid, refazer=False):
         USO.clear()
         coprot = dados.get('coprotagonistas') or []
         if coprot: dna['protagonistas'] = dados.get('ordem_nomes') or ([dna['nome']] + [c['nome'] for c in coprot])
-        h, crit = escrever(dna)
+        if dados.get('liberar_texto'):
+            # "Liberar assim" no painel (A4): usa o texto que a trava segurou, sem escrever de novo
+            baixar(pid, 'historia.json', od / 'historia.json')
+            h = json.loads((od / 'historia.json').read_text(encoding='utf-8'))
+            rv = (json.loads(p.get('resultado_json') or '{}').get('revisar') or {})
+            crit = {'media': rv.get('media'), 'liberado': True}
+            log(pid, 'texto liberado pelo painel, nota', rv.get('media'))
+        else:
+            h, crit, trava = escrever(dna)
+            if trava:
+                (od / 'historia.json').write_text(json.dumps(h, ensure_ascii=False, indent=1), encoding='utf-8')
+                subir(pid, od, ['historia.json'])
+                api(f'/admin/api/pedido/{pid}', {'status': 'revisar', 'revisar': trava})
+                log(pid, 'REVISAR: trava de qualidade, nota', trava['media'], '| gates', [k for k, v in trava['gates'].items() if v is False])
+                return
         (od / 'historia.json').write_text(json.dumps(h, ensure_ascii=False, indent=1), encoding='utf-8')
         ilus = ilustrar(h, dna, foto, estilo, od, ficha, coprot)
         d = livro_mod.montar(h, ilus, dna, od, pid=pid, pedido=p, log=log)
@@ -381,7 +430,7 @@ def produzir(pid, refazer=False):
         subir(pid, od, nomes)
         livro = {'titulo': h.get('titulo'), 'dedicatoria': h.get('dedicatoria'), 'gancho_proximo': h.get('gancho_proximo'),
                  'paginas': [{'n': x.get('n'), 'capitulo': x.get('capitulo'), 'texto': x.get('texto')} for x in h['paginas']], 'ilustracoes': ilus}
-        api(f'/admin/api/pedido/{pid}', {'status': 'entregue', 'resultado': {'capa': 'capa.jpg', 'livro': livro, 'marcas': marcas, 'nota': crit.get('media'), 'folhas': len(folhas), 'folha_de': mapa, 'imprimir': True, 'grafica': kit, 'diagramacao': 2, 'marcas_extra': marcas_extra, 'uso': USO, **({'marcador': 'marcador.pdf', 'marcador_img': 'marcador.jpg'} if marc else {})}})
+        api(f'/admin/api/pedido/{pid}', {'status': 'entregue', 'resultado': {'capa': 'capa.jpg', 'livro': livro, 'marcas': marcas, 'nota': crit.get('media'), 'versoes': crit.get('versoes'), 'escolhida': crit.get('escolhida'), 'folhas': len(folhas), 'folha_de': mapa, 'imprimir': True, 'grafica': kit, 'diagramacao': 2, 'marcas_extra': marcas_extra, 'uso': USO, **({'marcador': 'marcador.pdf', 'marcador_img': 'marcador.jpg'} if marc else {})}})
         log(pid, 'ENTREGUE', f'{SITE}/l/{p["token"]}', privado=True)
     except Exception as e:
         api(f'/admin/api/pedido/{pid}', {'status': 'falhou', 'erro': str(e)[:700]}); raise
