@@ -105,7 +105,7 @@ def _nota_min(c):
     if (c or {}).get('checklist'):
         ns = [float(x) for x in ((c or {}).get('notas') or {}).values() if str(x).replace('.', '', 1).isdigit()]
         return min(ns) if ns else 0
-    return _media(c) + 1
+    return _media(c) - 1  # média 7,5 → 6,5
 def _travado(v): return not v['aprovada'] and (bool(_gates_falsos(v['crit'])) or _nota_min(v['crit']) < 6.5)
 
 def _rodada(dna, versoes, max_rev):
