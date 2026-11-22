@@ -24,6 +24,50 @@ VINHETAS = {'reinos': ['castelo', 'heroi', 'dragao', 'mata'], 'lendas': ['saci',
             'games': ['heroi', 'tapete', 'mata'], 'primeiras': ['heroi', 'mata', 'raposa'], 'classicos': ['mago', 'castelo', 'mata'],
             'detetives': ['heroi', 'mata', 'navio']}
 ATIVIDADES = ['certificado', 'desenho', 'quem', 'recado', 'desenho2', 'recado2']
+# 22/11 (pedido ML-WDGSFC): 2 a 5 anos ainda não escrevem. As páginas que completam o caderno viram passatempo sem escrita:
+# desenho para colorir do TEMA do livro (banco em colorir/, sem o personagem, serve a qualquer pedido) e labirinto gerado aqui.
+COLORIR = HERE / 'colorir'
+FAM_COLORIR = {'natal': 'natal', 'reinos': 'reinos', 'bichos': 'bichos', 'lendas': 'lendas', 'primeiras': 'primeiras',
+               'classicos': 'classicos', 'biblia': 'biblia', 'games': 'games'}
+
+def desenhos_colorir(familia):
+    base = FAM_COLORIR.get(str(familia or ''), 'geral')
+    fs = sorted(COLORIR.glob(f'{base}_*.png')) + sorted(COLORIR.glob('geral_*.png'))
+    vistos, out = set(), []
+    for f in fs:
+        if f.name not in vistos: vistos.add(f.name); out.append(f)
+    return out
+
+def labirinto_svg(od, semente, cols=6, rows=8):
+    """Labirinto perfeito (um só caminho) com corredores largos para mão de 3 a 5 anos; entrada embaixo à esquerda (estrela), saída em cima à direita (coração)."""
+    import random
+    rnd = random.Random(str(semente))
+    vis = [[False] * cols for _ in range(rows)]
+    walls = {(c, r, d): True for c in range(cols) for r in range(rows) for d in 'NSEW'}
+    viz = {'N': (0, -1, 'S'), 'S': (0, 1, 'N'), 'E': (1, 0, 'W'), 'W': (-1, 0, 'E')}
+    pilha = [(0, rows - 1)]; vis[rows - 1][0] = True
+    while pilha:
+        c, r = pilha[-1]
+        op = [(d, c + dx, r + dy, o) for d, (dx, dy, o) in viz.items() if 0 <= c + dx < cols and 0 <= r + dy < rows and not vis[r + dy][c + dx]]
+        if not op: pilha.pop(); continue
+        d, nc, nr, o = rnd.choice(op)
+        walls[(c, r, d)] = False; walls[(nc, nr, o)] = False; vis[nr][nc] = True; pilha.append((nc, nr))
+    s, m = 30, 6
+    W, H = cols * s + 2 * m, rows * s + 2 * m
+    L = []
+    for c in range(cols):
+        for r in range(rows):
+            x, y = m + c * s, m + r * s
+            if walls[(c, r, 'N')] and not (c == cols - 1 and r == 0): L.append(f'M{x} {y}H{x + s}')
+            if walls[(c, r, 'W')]: L.append(f'M{x} {y}V{y + s}')
+            if c == cols - 1 and walls[(c, r, 'E')]: L.append(f'M{x + s} {y}V{y + s}')
+            if r == rows - 1 and walls[(c, r, 'S')] and c != 0: L.append(f'M{x} {y + s}H{x + s}')
+    est = 'M0,-11 L3,-3.5 11,-3.4 4.8,1.6 7,10 0,5 -7,10 -4.8,1.6 -11,-3.4 -3,-3.5Z'
+    cor = 'M0,9 C-12,0 -9,-10 0,-4 C9,-10 12,0 0,9Z'
+    svg = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="-14 -14 {W + 28} {H + 28}"><path d="{" ".join(L)}" fill="none" stroke="#1C1236" stroke-width="3.2" stroke-linecap="round"/>'
+           f'<path d="{est}" transform="translate({m + s / 2},{H + 4})" fill="#DDA53C" stroke="#1C1236" stroke-width="1.2"/>'
+           f'<path d="{cor}" transform="translate({W - m - s / 2},-5)" fill="#E86A5A" stroke="#1C1236" stroke-width="1.2"/></svg>')
+    f = pathlib.Path(od) / 'labirinto.svg'; f.write_text(svg, encoding='utf-8'); return f
 # Capitular gótica só nas letras que uma criança lê como a letra certa (o "O" gótico parece "D", o "A" parece "U").
 # As demais usam a Alegreya 800, a outra fonte da marca, no mesmo dourado e tamanho.
 GOTICA_OK = set('BCDEGLMNPQRSU')
@@ -145,6 +189,7 @@ body{font-family:Alegreya;color:#1C1236;font-kerning:normal;text-rendering:geome
 .atv .k{font:800 7.4pt Sans;letter-spacing:.24em;text-transform:uppercase;color:var(--goldd);text-align:center}
 .atv h2{font:800 18pt/1.15 Alegreya;margin:2.4mm 0 6mm;text-align:center;color:var(--ink)}
 .atv .mold{flex:1;border:.6mm dashed #DDA53C;border-radius:5mm}
+.atv .pass{flex:1;min-height:0;display:flex;align-items:center;justify-content:center}.atv .pass img{max-width:100%%;max-height:100%%;object-fit:contain}
 .atv .lin{flex:1;display:flex;flex-direction:column;justify-content:space-evenly}.atv .lin i{display:block;border-bottom:.35mm solid #D9CDB4;height:0}
 .atv .ass{font:italic 500 11pt Alegreya;color:var(--ink2);text-align:center;margin-top:4mm}
 .atv ul{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:1fr 1fr;gap:3.2mm 6mm}
@@ -281,7 +326,7 @@ def _paginas(h, ilus, dna, od, cfg, so_ilustra=frozenset(), grafica=False):
                         f'<small>No Clube da Lenda, a próxima aventura de {nome} começa daqui · minhalenda.com.br/clube</small></div>' if gancho else '')
                      + '</div>', '', None))
     # atividades fixas: certificado + página dividida (quem apareceu em cima, desenho embaixo); extras só se faltar página
-    elenco = [e.get('nome') for e in (dna.get('elenco') or []) if e.get('nome')][:8]
+    elenco = list(dict.fromkeys(e.get('nome').strip() for e in (dna.get('elenco') or []) if (e.get('nome') or '').strip()))[:8]  # sem nome repetido (22/11)
     P.append(('atv', f'<div class="cert"><div class="in2"><div class="k">Minha Lenda</div><h2>Certificado de leitor de lendas</h2>'
                      f'<div class="nm"{" style=\"font-size:.62em\"" if plural else ""}>{nome}</div><p>{"leram (ou ouviram)" if plural else "leu (ou ouviu)"} a aventura <b>{tit}</b> do começo ao fim.</p>'
                      '<div class="data">Data e assinatura</div></div></div>', '', None))
@@ -291,7 +336,20 @@ def _paginas(h, ilus, dna, od, cfg, so_ilustra=frozenset(), grafica=False):
         topo = '<div class="k">Sua vez</div><h3>Quem você levaria na próxima aventura?</h3><div class="lin" style="flex:0 0 26mm"><i></i><i></i><i></i></div>'
     P.append(('atv meia', f'<div class="in"><div class="meia1">{topo}</div><div class="meia2"><h3>Desenhe aqui a sua cena favorita</h3><div class="mold"></div>'
                           f'<div class="ass">Desenhado por {nome}</div></div></div>', '', None))
+    pequenos = fase in ('0', '0a')
+    cores = desenhos_colorir(dna.get('familia')) if pequenos else []
     for k in range(falta):
+        if pequenos:
+            # sem escrita: colorir (tema do livro), labirinto, colorir de novo
+            a = ['colorir', 'labirinto', 'colorir'][k % 3]
+            if a == 'labirinto':
+                lab = labirinto_svg(od, f"{h.get('titulo', '')}-{k}")
+                P.append(('atv', f'<div class="in"><div class="k">Hora de brincar</div><h2>Leve a estrela até o coração</h2><div class="pass"><img src="{uri(lab)}" alt=""></div></div>', '', None))
+                continue
+            if cores:
+                img = cores[(k // 2) % len(cores)]
+                P.append(('atv', f'<div class="in"><div class="k">Hora de colorir</div><h2>Pinte do seu jeito</h2><div class="pass"><img src="{uri(img)}" alt=""></div><div class="ass">Pintado por {nome}</div></div>', '', None))
+                continue
         a = ['desenho2', 'recado', 'recado2'][k % 3]
         if a == 'desenho2':
             P.append(('atv', f'<div class="in"><div class="k">Sua vez</div><h2>Invente o que acontece depois</h2><div class="mold"></div><div class="ass">Desenhado por {nome}</div></div>', '', None))

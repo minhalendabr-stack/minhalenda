@@ -344,7 +344,51 @@ def ajustar(pid):
     ilus = lv.get('ilustracoes') or []
     for n in ['capa.jpg'] + [x['arquivo'] for x in ilus]: baixar(pid, n, od / n)
     USO.clear(); extra = {}
-    if alvo == 'texto':
+    texto_mudou = alvo == 'texto'
+    if alvo == 'multi':
+        # 22/11: correção do editor num passo só, sem IA no texto: {"trocas": [["de", "para"]], "imagens": {"il_1": "correção"}, "capa": "correção"}
+        cfg = json.loads(instr)
+        for de, para in cfg.get('trocas') or []:
+            achou = False
+            for pg in h['paginas']:
+                if de in str(pg.get('texto', '')): pg['texto'] = pg['texto'].replace(de, para); achou = True
+            if de in str(h.get('gancho_proximo', '')): h['gancho_proximo'] = h['gancho_proximo'].replace(de, para); achou = True
+            if not achou: raise RuntimeError(f'troca não encontrada no texto: {de[:60]}')
+            texto_mudou = True
+        if dna.get('dedicatoria'): h['dedicatoria'] = dna['dedicatoria']
+        h['figurino_heroi_en'] = re.sub(r'\s*with [^,;.]*\bhair\b[^,;.]*', '', h.get('figurino_heroi_en') or '').strip()
+        (od / 'historia.json').write_text(json.dumps(h, ensure_ascii=False, indent=1), encoding='utf-8')
+        for k, corr in (cfg.get('cenas') or {}).items():
+            il = (h.get('ilustracoes') or [])[int(k) - 1]; il['cena_en'] = f"{il.get('cena_en')}. EDITOR CORRECTION, must follow: {corr}"
+        if cfg.get('ilustracoes'):
+            # refaz ficha, capa e todas as ilustrações a partir da foto (mantém texto); a nota do editor vale para o visual do herói
+            foto0 = p.get('foto_b64')
+            if not foto0: raise RuntimeError('a foto já foi apagada: peça uma foto nova ao cliente')
+            if cfg.get('visual_heroi'): h['figurino_heroi_en'] = (h.get('figurino_heroi_en') or '') + f". EDITOR NOTE on the hero look, must follow: {cfg['visual_heroi']}"
+            ilus = ilustrar(h, dna, foto0, estilo, od, None, dados.get('coprotagonistas') or [])
+            (od / 'historia.json').write_text(json.dumps(h, ensure_ascii=False, indent=1), encoding='utf-8')
+            extra['ilus_refeitas'] = True
+        imgs = dict(cfg.get('imagens') or {})
+        if cfg.get('capa'): imgs['capa'] = cfg['capa']
+        if imgs:
+            baixar(pid, 'ficha.jpg', od / 'ficha.jpg')
+            ficha = jpeg_b64(base64.b64encode((od / 'ficha.jpg').read_bytes()).decode())
+            foto = p.get('foto_b64')
+            foto = jpeg_b64(foto.split(',')[-1]) if foto else ficha
+            ev = h.get('elenco_visual') or []
+            for alvo_i, corr in imgs.items():
+                if alvo_i == 'capa':
+                    body = {'tipo': 'capa', 'cena': f"{h.get('capa_cena_en')}. EDITOR CORRECTION, must follow: {corr}", 'elenco': [e for e in ev if not e.get('real')][:1]}; arq = 'capa.jpg'
+                else:
+                    k = int(alvo_i.split('_')[1]); il = (h.get('ilustracoes') or [])[k - 1]
+                    quem = [e for e in ev if any(n and e.get('nome') and (e['nome'] in n or n in e['nome']) for n in (il.get('quem') or []))][:2]
+                    body = {'tipo': 'pagina', 'cena': f"{il.get('cena_en')}. EDITOR CORRECTION, must follow: {corr}", 'elenco': quem}; arq = f'il_{k}.jpg'
+                r2 = uso_resp(api('/admin/api/imagem', {**body, 'foto': foto, 'ficha': ficha, 'estilo': estilo, 'figurino': h.get('figurino_heroi_en'), 'mundo': h.get('mundo_visual_en') or '', 'nome': dna.get('nome'), 'objeto': dna.get('objeto')}))
+                if 'img' not in r2: raise RuntimeError('motor/imagem: ' + str(r2.get('erro') or r2)[:200])
+                im = Image.open(io.BytesIO(base64.b64decode(r2['img']))).convert('RGB'); im.thumbnail((1600, 1600))
+                im.save(od / arq, 'JPEG', quality=87, optimize=True, progressive=True)
+                log(pid, 'imagem refeita', arq)
+    elif alvo == 'texto':
         plan = {k: v for k, v in h.items() if k not in ('paginas', 'gancho_proximo')}
         tx = uso_resp(api('/admin/api/texto', {'dna': dna, 'plan': plan, 'rev': {'probs': [f'PEDIDO DO EDITOR, obrigatório (reclamação da família): {instr}. Mude só o necessário para atender o pedido; mantenha o resto da história, o tamanho e a divisão em páginas.'], 'anterior': h['paginas']}}))
         if 'txt' not in tx: raise RuntimeError('motor/texto: ' + str(tx.get('erro') or tx)[:300])
@@ -375,8 +419,8 @@ def ajustar(pid):
         im.save(od / arq, 'JPEG', quality=87, optimize=True, progressive=True)
     d = livro_mod.montar(h, ilus, dna, od, pid=pid, pedido=p, log=log)
     nomes = ['capa.jpg', 'livro.pdf', 'imprimir-livreto-a4.pdf', 'imprimir-a4.pdf', 'historia.json'] + [x['arquivo'] for x in ilus] + d['folhas'] + d['kit']
-    if alvo == 'ilustracoes': nomes.append('ficha.jpg')
-    if alvo == 'texto':
+    if alvo == 'ilustracoes' or extra.pop('ilus_refeitas', False): nomes.append('ficha.jpg')
+    if texto_mudou:
         marcas, marcas_extra = narrar(h, dna, od); nomes.append('audiolivro.mp3')
         extra = {'marcas': marcas, 'marcas_extra': marcas_extra,
                  'livro': {**lv, 'gancho_proximo': h.get('gancho_proximo'), 'paginas': [{'n': x.get('n'), 'capitulo': x.get('capitulo'), 'texto': x.get('texto')} for x in h['paginas']]}}
