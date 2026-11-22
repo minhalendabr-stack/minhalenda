@@ -90,7 +90,7 @@ def log(*a, privado=False):
 # ---------------- história ----------------
 # ML-QUAL-01 Lote A (20/11): guarda todas as versões com a crítica e entrega a melhor (A3); falha de estrutura ou de papel
 # refaz o PLANO, não só o texto (A5); se a melhor ainda tiver gate falso ou média < 7,5, o livro não sai (A4: status revisar).
-GATES_ESTRUTURA = ('gate_papel_ok', 'gate_protagonismo_ok', 'gate_final_ok')
+GATES_ESTRUTURA = ('gate_papel_ok', 'gate_protagonismo_ok', 'gate_final_ok', 'gate_estrutura_ok')  # Lote C: derivados do checklist
 NOTA_MIN = 7.5
 def _gates_falsos(c): return [k for k, v in (c or {}).items() if k.startswith('gate_') and v is False]
 def _media(c): return float((c or {}).get('media') or 0)
@@ -100,7 +100,13 @@ def _melhor(versoes):
     return min(versoes, key=lambda v: (len(_gates_falsos(v['crit'])), -_media(v['crit'])))
 def _estrutural(c):
     return any((c or {}).get(g) is False for g in GATES_ESTRUTURA) or float(((c or {}).get('notas') or {}).get('estrutura', 10) or 10) < 7
-def _travado(v): return not v['aprovada'] and (bool(_gates_falsos(v['crit'])) or _media(v['crit']) < NOTA_MIN)
+def _nota_min(c):
+    # Lote C (22/11): com checklist, as 4 notas têm âncora; trava se a MENOR ficar abaixo de 6,5. Crítica antiga: média < 7,5.
+    if (c or {}).get('checklist'):
+        ns = [float(x) for x in ((c or {}).get('notas') or {}).values() if str(x).replace('.', '', 1).isdigit()]
+        return min(ns) if ns else 0
+    return _media(c) + 1
+def _travado(v): return not v['aprovada'] and (bool(_gates_falsos(v['crit'])) or _nota_min(v['crit']) < 6.5)
 
 def _rodada(dna, versoes, max_rev):
     pl = uso_resp(api('/admin/api/plano', dna))
