@@ -349,12 +349,11 @@ def ajustar(pid):
         # 22/11: correção do editor num passo só, sem IA no texto: {"trocas": [["de", "para"]], "imagens": {"il_1": "correção"}, "capa": "correção"}
         cfg = json.loads(instr)
         for de, para in cfg.get('trocas') or []:
-            achou = False
-            for pg in h['paginas']:
-                if de in str(pg.get('texto', '')): pg['texto'] = pg['texto'].replace(de, para); achou = True
-            if de in str(h.get('gancho_proximo', '')): h['gancho_proximo'] = h['gancho_proximo'].replace(de, para); achou = True
-            if not achou: raise RuntimeError(f'troca não encontrada no texto: {de[:60]}')
-            texto_mudou = True
+            # vale para o livro inteiro (páginas, gancho, roteiro, elenco visual), não só para o texto lido
+            s = json.dumps(h, ensure_ascii=False)
+            if de not in s: raise RuntimeError(f'troca não encontrada no livro: {de[:60]}')
+            if any(de in str(pg.get('texto', '')) for pg in h['paginas']) or de in str(h.get('gancho_proximo', '')): texto_mudou = True
+            h = json.loads(s.replace(json.dumps(de, ensure_ascii=False)[1:-1], json.dumps(para, ensure_ascii=False)[1:-1]))
         if dna.get('dedicatoria'): h['dedicatoria'] = dna['dedicatoria']
         h['figurino_heroi_en'] = re.sub(r'\s*with [^,;.]*\bhair\b[^,;.]*', '', h.get('figurino_heroi_en') or '').strip()
         (od / 'historia.json').write_text(json.dumps(h, ensure_ascii=False, indent=1), encoding='utf-8')
