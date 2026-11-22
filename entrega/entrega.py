@@ -425,7 +425,13 @@ def ajustar(pid):
                  'livro': {**lv, 'gancho_proximo': h.get('gancho_proximo'), 'paginas': [{'n': x.get('n'), 'capitulo': x.get('capitulo'), 'texto': x.get('texto')} for x in h['paginas']]}}
     subir(pid, od, nomes)
     aj['feito_em'] = time.strftime('%Y-%m-%dT%H:%M:%S'); hist = (r.get('ajustes') or []) + [aj]
-    api(f'/admin/api/pedido/{pid}', {'resultado_merge': {**extra, 'folhas': len(d['folhas']), 'folha_de': d['folha_de'], 'grafica': d['kit'] or r.get('grafica') or [], 'ajuste': None, 'ajustes': hist, 'v': int(time.time())}})
+    # 22/11: o custo de IA dos ajustes soma no uso do pedido (o painel/DRE calcula o custo a partir de 'uso')
+    tot = json.loads(json.dumps(r.get('uso') or {}))
+    for m, x in USO.items():
+        y = tot.setdefault(m, {'in': 0, 'out': 0, 'n': 0, 'img': 0})
+        for k in ('in', 'out', 'n', 'img'): y[k] = int(y.get(k) or 0) + int(x.get(k) or 0)
+    aj['uso'] = dict(USO)
+    api(f'/admin/api/pedido/{pid}', {'resultado_merge': {**extra, 'uso': tot, 'folhas': len(d['folhas']), 'folha_de': d['folha_de'], 'grafica': d['kit'] or r.get('grafica') or [], 'ajuste': None, 'ajustes': hist, 'v': int(time.time())}})
     log(pid, 'AJUSTADO', alvo)
 
 def produzir(pid, refazer=False):
