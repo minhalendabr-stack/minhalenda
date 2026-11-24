@@ -326,7 +326,7 @@ def _paginas(h, ilus, dna, od, cfg, so_ilustra=frozenset(), grafica=False):
                         f'<small>No Clube da Lenda, a próxima aventura de {nome} começa daqui · minhalenda.com.br/clube</small></div>' if gancho else '')
                      + '</div>', '', None))
     # atividades fixas: certificado + página dividida (quem apareceu em cima, desenho embaixo); extras só se faltar página
-    elenco = list(dict.fromkeys(e.get('nome').strip() for e in (dna.get('elenco') or []) if (e.get('nome') or '').strip()))[:8]  # sem nome repetido (22/11)
+    elenco = list(dict.fromkeys(e.get('nome').strip() for e in (dna.get('elenco') or []) if (e.get('nome') or '').strip()))[:10]  # sem nome repetido (22/11)
     P.append(('atv', f'<div class="cert"><div class="in2"><div class="k">Minha Lenda</div><h2>Certificado de leitor de lendas</h2>'
                      f'<div class="nm"{" style=\"font-size:.62em\"" if plural else ""}>{nome}</div><p>{"leram (ou ouviram)" if plural else "leu (ou ouviu)"} a aventura <b>{tit}</b> do começo ao fim.</p>'
                      '<div class="data">Data e assinatura</div></div></div>', '', None))
