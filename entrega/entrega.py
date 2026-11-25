@@ -168,8 +168,25 @@ def jpeg_b64(b64, maxw=768, q=86):
 def ilustrar(h, dna, foto, estilo, od, ficha=None, coprot=None):
     # ficha do herói: gerada da foto no livro 1; no Clube, os livros seguintes reaproveitam a do livro 1 (a foto já foi apagada)
     if not ficha:
-        f = uso_resp(api('/admin/api/imagem', {'tipo': 'ficha', 'foto': foto, 'estilo': estilo, 'figurino': h.get('figurino_heroi_en'), 'nome': dna['nome']}))
-        ficha = jpeg_b64(f['img'])
+        # 25/11 (Rodrigo): a ficha é a base de todas as páginas. Confere a semelhança DELA antes de desenhar o resto:
+        # nota < 7 refaz só a ficha (1 vez, com a diferença apontada) e segue com a melhor. Evita refazer o livro inteiro no fim.
+        melhor, nota_m, nota_ficha = None, -1, None
+        dica = ''
+        for tent in range(2):
+            fig = (h.get('figurino_heroi_en') or '') + (f'. FIX the likeness, must follow: {dica}' if dica else '')
+            f = uso_resp(api('/admin/api/imagem', {'tipo': 'ficha', 'foto': foto, 'estilo': estilo, 'figurino': fig, 'nome': dna['nome']}))
+            cand = jpeg_b64(f['img'])
+            try:
+                sm = uso_resp(api('/admin/api/semelhanca_img', {'foto': jpeg_b64(foto.split(',')[-1], 1024, 85), 'imgs': [{'nome': 'ficha.jpg', 'data': cand}], 'nome': dna.get('nome'), 'idade': dna.get('idade')}, tries=1, timeout=120))
+                nota = float(sm.get('nota') or 0)
+            except Exception as e:
+                log('semelhança da ficha indisponível', type(e).__name__); melhor = cand; nota_ficha = None; break
+            log('ficha', tent, 'semelhança', nota, privado=True)
+            if nota > nota_m: melhor, nota_m = cand, nota
+            if nota >= 7: break
+            dica = str(sm.get('diferencas') or 'face, hair and skin must match the photo')[:300]
+        ficha = melhor; nota_ficha = nota_m if nota_m >= 0 else None
+        h['_nota_ficha'] = nota_ficha
     (od / 'ficha.jpg').write_bytes(base64.b64decode(ficha))
     # co-protagonistas (01/11): cada irmão ganha a própria ficha (da foto dele) e aparece de rosto em todas as cenas
     herois = []
