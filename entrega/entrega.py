@@ -62,6 +62,13 @@ def admin_auth():
 AUTH = None
 # custo por livro (14/10): tokens por modelo, imagens e áudio; o admin converte em R$ com a tabela de preços
 USO = {}
+# 25/11 (Rodrigo: "não podemos gerar 30 para aproveitar 5"): teto de imagens por pedido, somando produção e ajustes.
+# Livro = ficha + capa + 5 páginas (7). Teto de vida do pedido: 14 (o livro + 1 refação completa). Passou disso, o ajuste
+# falha com aviso e o Rodrigo decide (refazer só a imagem ruim com il_N/capa, que custa 1).
+IMG_TETO = int(os.environ.get('ML_IMG_TETO', '14'))
+IMG_BASE = 0          # imagens já gastas no pedido antes deste run
+REFACOES_CONF = [0]   # refações pedidas pela conferência visual neste run (máx. 2 por livro)
+def imgs_gastas(): return IMG_BASE + sum(int(x.get('img') or 0) for x in USO.values())
 def uso(model, tin=0, tout=0, n=1, img=0):
     u = USO.setdefault(model, {'in': 0, 'out': 0, 'n': 0, 'img': 0})
     u['in'] += int(tin or 0); u['out'] += int(tout or 0); u['n'] += n; u['img'] += img
@@ -69,6 +76,8 @@ def uso_resp(r):
     for x in (r or {}).get('usage') or []: uso(x.get('model', '?'), x.get('in'), x.get('out'), img=int(x.get('img') or 0))
     return r
 def api(path, body=None, method=None, raw=None, ctype=None, tries=3, timeout=300):
+    if path == '/admin/api/imagem' and imgs_gastas() >= IMG_TETO:
+        raise RuntimeError(f'teto de {IMG_TETO} imagens do pedido atingido ({imgs_gastas()} gastas): refaça só a imagem ruim (capa/il_N) ou suba ML_IMG_TETO')
     for k in range(tries):
         try:
             data = raw if raw is not None else (json.dumps(body).encode() if body is not None else None)
@@ -190,7 +199,8 @@ def ilustrar(h, dna, foto, estilo, od, ficha=None, coprot=None):
                 if tent < 2:
                     try:
                         cf_ = uso_resp(api('/admin/api/conferir_imagem', {'img': jpeg_b64(base64.b64encode((od / f'{nome}.jpg').read_bytes()).decode(), 1024, 82), 'cena': extra.get('cena'), 'nome': ', '.join([dna['nome']] + [x['nome'] for x in herois]), 'herois_n': len(herois), 'objeto': dna.get('objeto') or '', 'extras': len(extra.get('elenco') or [])}, tries=1, timeout=120))
-                        if not cf_.get('ok') and cf_.get('problemas') and not conserto:
+                        if not cf_.get('ok') and cf_.get('problemas') and not conserto and REFACOES_CONF[0] < 2:
+                            REFACOES_CONF[0] += 1
                             conserto = '; '.join(cf_['problemas']); log('conferência pediu nova versão de', nome, privado=True); continue
                     except Exception as e: log('conferência indisponível', type(e).__name__)
                 return nome, pagina
@@ -225,8 +235,15 @@ def marcador(h, dna, dados, foto, estilo, od):
 
 # ---------------- áudio ----------------
 KEY = None
+TTS_PID = None
 def tts(text, voice):
     h = hashlib.sha1(f'gemini-3.1-flash-tts-preview|{voice}|{ESTILO_TTS}|{text}'.encode()).hexdigest()[:16]; c = CACHE / f'{h}.wav'
+    # 25/11: o cache local some a cada run do Actions; cada ajuste re-narrava o livro inteiro (Ayla: 6x).
+    # Agora cada trecho fica guardado no R2 do pedido (tts-<hash>.wav) e só o trecho que mudou vai à IA.
+    if not c.exists() and TTS_PID:
+        try: baixar(TTS_PID, f'tts-{h}.wav', c, tentativas=1)
+        except Exception: c.unlink(missing_ok=True)
+    novo = not c.exists()
     if not c.exists():
         body = {"contents": [{"parts": [{"text": f"{ESTILO_TTS} {text}"}]}], "generationConfig": {"responseModalities": ["AUDIO"], "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": voice}}}}}
         for k in range(4):
@@ -244,11 +261,15 @@ def tts(text, voice):
             except Exception as e:
                 if k == 3: raise
                 log('tts tenta de novo', str(e)[:120]); time.sleep(6 * (k + 1))
+    if novo and TTS_PID:
+        try: api(f'/admin/api/pedido/{TTS_PID}/arquivo/tts-{h}.wav', raw=c.read_bytes(), method='PUT', ctype='audio/wav', timeout=300)
+        except Exception as e: log('tts cache R2 falhou', str(e)[:80])
     return c
 
 def dur(f): return float(subprocess.run(['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', str(f)], capture_output=True, text=True).stdout)
 
 def narrar(h, dna, od):
+    global TTS_PID; TTS_PID = od.name if str(od.name).startswith('ML-') else None
     voice, tempo = VOZ[str(dna.get('fase', '1'))]
     nome = livro_mod.nomes_todos(dna)
     abre = f"Minha Lenda apresenta: {h.get('titulo','')}. Uma história criada especialmente para {nome}."
@@ -309,13 +330,13 @@ def subir(pid, od, nomes):
         ct = 'application/pdf' if n.endswith('.pdf') else 'audio/mpeg' if n.endswith('.mp3') else 'text/plain; charset=utf-8' if n.endswith('.txt') else 'application/json' if n.endswith('.json') else 'image/jpeg'
         api(f'/admin/api/pedido/{pid}/arquivo/{n}', raw=(od / n).read_bytes(), method='PUT', ctype=ct, timeout=600)
 
-def baixar(pid, nome, dst):
-    for k in range(3):
+def baixar(pid, nome, dst, tentativas=3):
+    for k in range(tentativas):
         try:
             h = {'authorization': oidc() if AUTH == 'oidc' else AUTH, 'user-agent': 'MinhaLenda-Executor/1.0'}
             dst.write_bytes(urllib.request.urlopen(urllib.request.Request(f'{SITE}/admin/api/pedido/{pid}/arquivo/{nome}', headers=h), timeout=120).read()); return
         except Exception:
-            if k == 2: raise
+            if k == tentativas - 1: raise
             time.sleep(4)
 
 def rediagramar(pid):
@@ -349,7 +370,11 @@ def ajustar(pid):
     h = json.loads((od / 'historia.json').read_text(encoding='utf-8'))
     ilus = lv.get('ilustracoes') or []
     for n in ['capa.jpg'] + [x['arquivo'] for x in ilus]: baixar(pid, n, od / n)
-    USO.clear(); extra = {}
+    USO.clear(); extra = {}; REFACOES_CONF[0] = 0
+    global IMG_BASE; IMG_BASE = sum(int(x.get('img') or 0) for x in (r.get('uso') or {}).values())
+    refaz_tudo = alvo == 'ilustracoes' or (alvo == 'multi' and json.loads(instr or '{}').get('ilustracoes'))
+    if refaz_tudo and IMG_BASE + 7 > IMG_TETO:
+        raise RuntimeError(f'refazer as 7 imagens passaria do teto ({IMG_BASE} já gastas, teto {IMG_TETO}): use capa/il_N só nas imagens com defeito')
     texto_mudou = alvo == 'texto'
     if alvo == 'multi':
         # 22/11: correção do editor num passo só, sem IA no texto: {"trocas": [["de", "para"]], "imagens": {"il_1": "correção"}, "capa": "correção"}
@@ -456,7 +481,7 @@ def produzir(pid, refazer=False):
             ficha = jpeg_b64(base64.b64encode((od / 'ficha_ref.jpg').read_bytes()).decode()); foto = ficha
         if not foto: raise RuntimeError('pedido sem foto')
         log(pid, dna['nome'], 'idade', dna.get('idade'), 'história', dna.get('familia'), dna.get('historia'), privado=True)
-        USO.clear()
+        global IMG_BASE; IMG_BASE = 0; REFACOES_CONF[0] = 0; USO.clear()
         coprot = dados.get('coprotagonistas') or []
         if coprot: dna['protagonistas'] = dados.get('ordem_nomes') or ([dna['nome']] + [c['nome'] for c in coprot])
         if dados.get('liberar_texto'):
